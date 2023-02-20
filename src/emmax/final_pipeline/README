@@ -1,0 +1,4 @@
+The original "final_pipeline" pipeline files are now in the archive/ directory. This pipeline was later ammened to pre-regress covariates before EMMAX association. The pre-regression pipeline is now the "final_pipeline."
+
+A 3rd iteration of the "final_pipeline" now includes multiple testing correction by eigenMT + BH (5% FDR). June 2020.
+

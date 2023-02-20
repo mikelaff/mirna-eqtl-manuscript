@@ -1,0 +1,581 @@
+---
+title: "miRNA Targets Overlap Fisher's Exact"
+author: "Mike Lafferty"
+date: "10/28/2018"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(readr)
+library(readxl)
+library(topGO)
+library(knitr)
+library(miRNAtap)
+library(org.Hs.eg.db)
+library(AnnotationHub)
+library(kableExtra)
+
+source(here("src/utils/lafferty_utils.R"))
+```
+
+```{r}
+# INPUT FILES #####################################################################################
+# combined deseq2 shrunken results of gene expression in gzcp or gw as a dataframe with labels for 
+# significance and category (neuro vs maturation)
+gene_expression_combined_df_rds <- here("doc/diff_expression/rdata/combined_gene_expression_deseq2_shrunken_results_df.rds")
+# combined deseq2 shrunken results of mirna expression in gzcp or gw as a dataframe with labels for 
+# significance and category (neuro vs maturation)
+mirna_expression_combined_df_rds <- here("doc/diff_expression/rdata/combined_deseq2_shrunken_results_df.rds")
+
+# data frame with fisher test results: targets (2+ DBs) overlap with all genes
+fisher_test_overlap_rds_all <- here("doc/target_overlap/rdata/mirna_fisher_test_overlap_results.rds")
+# data frame with fisher test results: top 50 targets overlap with all genes
+fisher_test_overlap_rds_top50 <- here("doc/target_overlap/rdata/mirna_fisher_test_overlap_top50_results.rds")
+# data frame with fisher test results: targets (2+ DBs) overlap with high expressed genes
+fisher_test_overlap_rds_highExpress <- here("doc/target_overlap/rdata/mirna_fisher_test_overlap_high_expressers_results.rds")
+# data frame with fisher test results: targets (2+ DBs) overlap with high l2fc genes
+fisher_test_overlap_rds_highL2FC <- here("doc/target_overlap/rdata/mirna_fisher_test_overlap_high_l2fc_results.rds")
+# data frame with fisher test results: validated targets overlap with all genes
+fisher_test_overlap_rds_valTarg <- here("doc/target_overlap/rdata/mirna_fisher_test_overlap_results_valTargets.rds")
+```
+
+```{r}
+gene_df <- readRDS(gene_expression_combined_df_rds)
+```
+
+## Diff. Expressed miRNAs: GZ/CP vs GW
+
+```{r}
+mirna_df <- readRDS(mirna_expression_combined_df_rds)
+
+circColor <- "black"
+labelColor <- "black"
+
+# plot the categories
+mirna_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point() +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-124-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-124-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-9-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=1, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-9-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=1.5, color=labelColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-124-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-124-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-9-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-9-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-92b-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=1, vjust=-0.5, color=labelColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-92b-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_label(data=subset(mirna_df, mirna == "hsa-miR-92b-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_point(data=subset(mirna_df, mirna == "hsa-miR-92b-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor)
+```
+
+## miRNA Target Overlap: Targets in 2+ DBs with All Genes
+
+miRNA targets that are in at least 2 of 5 databases overlapped with all differentially expressed genes. Targets are overlapped with GZ>CP/CP>GZ or Maturation_early/Maturation_late by Fisher's Exact test.
+
+```{r}
+df <- readRDS(fisher_test_overlap_rds_all)
+
+# all genes are in one of 5 groups: gz>cp, cp>gz, mat_early, mat_late, or none (notDE)
+genes_gz_greater_than_cp <- gene_df$ensg[which(gene_df$category == "neurogenesis_gz")]
+genes_cp_greater_than_gz <- gene_df$ensg[which(gene_df$category == "neurogenesis_cp")]
+genes_maturation_early <- gene_df$ensg[which(gene_df$category == "maturation_early")]
+genes_maturation_late <- gene_df$ensg[which(gene_df$category == "maturation_late")]
+genes_notDE <- gene_df$ensg[which(gene_df$category == "none")]
+
+# totals
+num_genes_gz_greater_than_cp <- length(genes_gz_greater_than_cp)
+num_genes_cp_greater_than_gz <- length(genes_cp_greater_than_gz)
+num_genes_maturation_early <- length(genes_maturation_early)
+num_genes_maturation_late <- length(genes_maturation_late)
+num_genes_notDE <- length(genes_notDE)
+```
+
+```{r}
+i <- 1003
+df$mirna[i]
+tab <- matrix(c(num_genes_gz_greater_than_cp-df$num_targets_gz_over_cp[i],
+                num_genes_cp_greater_than_gz-df$num_targets_cp_over_gz[i],
+                df$num_targets_gz_over_cp[i],
+                df$num_targets_cp_over_gz[i]), nrow = 2, byrow = TRUE)
+
+colnames(tab) <- c("gz>cp", "cp>gz")
+rownames(tab) <- c("not_targets", "targets")
+tab
+#fisher test gz>cp vs cp>gz
+ft <- fisher.test(tab)
+ft
+```
+
+**Odds Ratio > 1: more targets amoung cp>gz genes than in gz>cp genes**
+
+```{r}
+i <- 1208
+df$mirna[i]
+tab <- matrix(c(num_genes_maturation_early-df$num_targets_mat_early[i],
+                num_genes_maturation_late-df$num_targets_mat_late[i],
+                df$num_targets_mat_early[i],
+                df$num_targets_mat_late[i]), nrow = 2, byrow = TRUE)
+
+colnames(tab) <- c("mat_early", "mat_late")
+rownames(tab) <- c("not_targets", "targets")
+tab
+# fisher test mat_early vs mat_late
+ft <- fisher.test(tab)
+ft
+```
+
+**Odds Ratio > 1: more targets in maturation late than early**
+
+### Neurogenesis Up in GZ (GZ>CP)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Neurogenesis Up in CP (CP>GZ)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Early Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Late Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+## miRNA Target Overlap: Top 50 Targets with All Genes
+
+miRNA targets that are in at least 2 of 5 databases and in the top 50 ranked list overlapped with all differentially expressed genes. Targets are overlapped with GZ>CP/CP>GZ or Maturation_early/Maturation_late by Fisher's Exact test.
+
+```{r}
+df <- readRDS(fisher_test_overlap_rds_top50)
+```
+
+**Odds Ratio > 1: more targets amoung cp>gz genes than in gz>cp genes**  
+
+**Odds Ratio > 1: more targets in maturation late than early**  
+
+### Neurogenesis Up in GZ (GZ>CP)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Neurogenesis Up in CP (CP>GZ)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Early Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  geom_text(data=filter(df, category == "maturation_early", FT_early_late_odds < 0.3), aes(label=mirna), hjust=0, vjust=0, size=2) +
+  plotTheme
+```
+
+### Maturation Up Late Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+## miRNA Target Overlap: Targets Overlapped with High Expressers
+
+miRNA targets that are in at least 2 of 5 databases overlapped with highly expressed (>1000 mean counts) differentially expressed genes. Targets are overlapped with GZ>CP/CP>GZ or Maturation_early/Maturation_late by Fisher's Exact test.
+
+```{r}
+df <- readRDS(fisher_test_overlap_rds_highExpress)
+```
+
+**Odds Ratio > 1: more targets amoung cp>gz genes than in gz>cp genes**  
+
+**Odds Ratio > 1: more targets in maturation late than early**  
+
+### Neurogenesis Up in GZ (GZ>CP)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Neurogenesis Up in CP (CP>GZ)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Early Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Late Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+## miRNA Target Overlap: Targets Overlapped with High Log2FoldChange
+
+miRNA targets that are in at least 2 of 5 databases overlapped with highly differentially expressed genes (top 1000 by L2FC). Targets are overlapped with GZ>CP/CP>GZ or Maturation_early/Maturation_late by Fisher's Exact test.
+
+```{r}
+df <- readRDS(fisher_test_overlap_rds_highL2FC)
+```
+
+**Odds Ratio > 1: more targets amoung cp>gz genes than in gz>cp genes**  
+
+**Odds Ratio > 1: more targets in maturation late than early**  
+
+### Neurogenesis Up in GZ (GZ>CP)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Neurogenesis Up in CP (CP>GZ)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Early Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Maturation Up Late Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+## miRNA Target Overlap: Validated Targets Overlapped with all Genes
+
+miRNA targets from mirtarbase v7 overlapped with all differentially expressed genes. Targets are overlapped with GZ>CP/CP>GZ or Maturation_early/Maturation_late by Fisher's Exact test.
+
+```{r}
+df <- readRDS(fisher_test_overlap_rds_valTarg)
+```
+
+**Odds Ratio > 1: more targets amoung cp>gz genes than in gz>cp genes**  
+
+**Odds Ratio > 1: more targets in maturation late than early**  
+
+### Neurogenesis Up in GZ (GZ>CP)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_gz") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```
+
+### Neurogenesis Up in CP (CP>GZ)
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+```{r}
+df %>%
+  filter(category == "neurogenesis_cp") %>%
+  ggplot(aes(x=log10(FT_gz_cp_odds), y=-log10(FT_gz_cp_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  geom_text(data=filter(df, category == "neurogenesis_cp", FT_gz_cp_pval < 0.0005), aes(label=mirna), hjust=0, vjust=0, size=3) +
+  plotTheme
+```
+
+### Maturation Up Early Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_early") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05))  +
+  geom_text(data=filter(df, category == "maturation_early", FT_early_late_odds < 0.5, FT_early_late_pval < 0.05), aes(label=mirna), hjust=0, vjust=0, size=3) +
+  plotTheme
+```
+
+### Maturation Up Late Gest. Weeks
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "100%", height = "200px")
+```
+
+
+```{r}
+df %>%
+  filter(category == "maturation_late") %>%
+  ggplot(aes(x=log10(FT_early_late_odds), y=-log10(FT_early_late_pval))) +
+  geom_point() +
+  geom_hline(yintercept = -log10(0.05)) +
+  plotTheme
+```

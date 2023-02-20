@@ -1,0 +1,412 @@
+---
+title: "miRNA Targets GO Analysis"
+author: "Mike Lafferty"
+date: "10/14/2018"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(readr)
+library(readxl)
+library(topGO)
+library(knitr)
+
+source(here("src/utils/lafferty_utils.R"))
+```
+
+```{r}
+# INPUT FILES #####################################################################################
+# mirtarbase v7 hsa targets
+mirna_targets_xlsx <- here("data/mirtarbase_v7/hsa_MTI.xlsx")
+# combined deseq2 shrunken results as a dataframe with labels for significance and category (neuro vs maturation)
+combined_df_rds <- here("doc/diff_expression/rdata/combined_deseq2_shrunken_results_df.rds")
+
+# Load DF #########################################################################################
+combined_results_df <- readRDS(combined_df_rds)
+
+# Load Targets ####################################################################################
+targets <- read_xlsx(mirna_targets_xlsx)
+# trim dataframe
+targets %<>% dplyr::select(mirna = miRNA, target_gene = `Target Gene`, target_gene_entrez_id = `Target Gene (Entrez Gene ID)`)
+# only keep unique mirna-target interactions (remove rows from multiple references)
+targets %<>% dplyr::filter(!duplicated(paste(targets$mirna, targets$target_gene_entrez_id, sep="_")))
+
+# all gene target entrez ids
+all_entrez_ids <- as.character(targets$target_gene_entrez_id[!duplicated(targets$target_gene_entrez_id)])
+```
+
+```{r}
+circColor <- "black"
+labelColor <- "black"
+
+# plot the categories
+combined_results_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point() +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-124-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-124-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-9-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=1, vjust=-0.5, color=labelColor) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-9-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=1.5, color=labelColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-124-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-124-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-9-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-9-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-92b-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=1, vjust=-0.5, color=labelColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-92b-3p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor) +
+  geom_label(data=subset(combined_results_df, mirna == "hsa-miR-92b-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp, label=mirna), hjust=0, vjust=-0.5, color=labelColor) +
+  geom_point(data=subset(combined_results_df, mirna == "hsa-miR-92b-5p"), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=2, color=circColor)
+```
+
+## Neurogenesis: miRNAs Upregulated in CP
+
+```{r}
+combined_results_df %>%
+  filter(category == "neurogenesis_cp") %>%
+  dplyr::select(miRNA = mirna, baseMean.gzcp, log2FoldChange.gzcp, padj.gzcp, sig.both, category) %>%
+  arrange(log2FoldChange.gzcp) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r, fig.height=3, fig.width=3, message=FALSE, results="asis"}
+#for (i in 1:length(tmp$miRNA)) {
+for (i in 1:10) {
+  this_mirna <- tmp$miRNA[i]
+  
+  cat("  \n###",  this_mirna, "  \n")
+  cat("  \n")
+  cat(paste("base mean (counts): ", round(tmp$baseMean.gzcp[i], 3), sep=""))
+  cat("  \n")
+  cat(paste("log2 fold change: ", round(tmp$log2FoldChange.gzcp[i], 3), sep=""))
+  cat("  \n")
+  
+  combined_results_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point(size=1) +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  theme(legend.position = "none", axis.title = element_text(size=10)) +
+  geom_point(data=subset(combined_results_df, mirna == this_mirna), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=1, color=circColor) -> p
+  
+  print(p)
+  
+  # target entrez ids associated with this mirna
+  this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+  
+  # check for no targets found
+  if(length(this_mirna_target_entrez_ids) == 0) {
+    cat("no targets found  \n")
+    this_mirna <- strsplit(this_mirna, "/")[[1]][1]
+    cat("trying ", this_mirna, "  \n")
+    # target entrez ids associated with this mirna
+    this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+    if(length(this_mirna_target_entrez_ids) == 0) {
+      cat("no targets found  \n")
+      cat("  \n")
+      next
+    }
+  }
+  # target names associated with this mirna
+  this_mirna_target_names <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene)
+  #print(head(this_mirna_target_names))
+  
+  # number of target genes in database
+  cat("number of target genes in database: ", length(this_mirna_target_entrez_ids), "  \n")
+  
+  geneList <- factor(as.integer(all_entrez_ids %in% this_mirna_target_entrez_ids))
+  names(geneList) <- all_entrez_ids
+
+  myGOdata <- new("topGOdata",
+                  ontology = "BP",
+                  description = "my data",
+                  allGenes = geneList,
+                  nodeSize = 10,
+                  annotationFun = annFUN.org,
+                  mapping = "org.Hs.eg.db")
+
+  resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+
+  allRes <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 20, orderBy = "classic_fisher")
+  
+  print(kable(allRes))
+  
+  cat("  \n")
+}
+```
+
+
+## Neurogenesis: miRNAs Upregulated in GZ
+
+```{r}
+combined_results_df %>%
+  filter(category == "neurogenesis_gz") %>%
+  dplyr::select(miRNA = mirna, baseMean.gzcp, log2FoldChange.gzcp, padj.gzcp, sig.both, category) %>%
+  arrange(-log2FoldChange.gzcp) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r}
+combined_results_df %>%
+  filter(category == "neurogenesis_gz", baseMean.gzcp > 100) %>%
+  dplyr::select(miRNA = mirna, baseMean.gzcp, log2FoldChange.gzcp, padj.gzcp, sig.both, category) %>%
+  arrange(-log2FoldChange.gzcp) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r, fig.height=3, fig.width=3, message=FALSE, results="asis"}
+#for (i in 1:length(tmp$miRNA)) {
+for (i in 1:10) {
+  this_mirna <- tmp$miRNA[i]
+  
+  cat("  \n###",  this_mirna, "  \n")
+  cat("  \n")
+  cat(paste("base mean (counts): ", round(tmp$baseMean.gzcp[i], 3), sep=""))
+  cat("  \n")
+  cat(paste("log2 fold change: ", round(tmp$log2FoldChange.gzcp[i], 3), sep=""))
+  cat("  \n")
+  
+  combined_results_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point(size=1) +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  theme(legend.position = "none", axis.title = element_text(size=10)) +
+  geom_point(data=subset(combined_results_df, mirna == this_mirna), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=1, color=circColor) -> p
+  
+  print(p)
+  
+  # target entrez ids associated with this mirna
+  this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+  
+  # check for no targets found
+  if(length(this_mirna_target_entrez_ids) == 0) {
+    cat("no targets found  \n")
+    this_mirna <- strsplit(this_mirna, "/")[[1]][1]
+    cat("trying ", this_mirna, "  \n")
+    # target entrez ids associated with this mirna
+    this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+    if(length(this_mirna_target_entrez_ids) == 0) {
+      cat("no targets found  \n")
+      cat("  \n")
+      next
+    }
+  }
+  # target names associated with this mirna
+  this_mirna_target_names <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene)
+  #print(head(this_mirna_target_names))
+  
+  # number of target genes in database
+  cat("number of target genes in database: ", length(this_mirna_target_entrez_ids), "  \n")
+  
+  geneList <- factor(as.integer(all_entrez_ids %in% this_mirna_target_entrez_ids))
+  names(geneList) <- all_entrez_ids
+
+  myGOdata <- new("topGOdata",
+                  ontology = "BP",
+                  description = "my data",
+                  allGenes = geneList,
+                  nodeSize = 10,
+                  annotationFun = annFUN.org,
+                  mapping = "org.Hs.eg.db")
+
+  resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+
+  allRes <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 20, orderBy = "classic_fisher")
+  
+  print(kable(allRes))
+  
+  cat("  \n")
+}
+```
+
+## Maturation: miRNAs Upregulated Early
+
+```{r}
+combined_results_df %>%
+  filter(category == "maturation_early") %>%
+  dplyr::select(miRNA = mirna, baseMean.gw, log2FoldChange.gw, padj.gw, sig.both, category) %>%
+  arrange(log2FoldChange.gw) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r}
+combined_results_df %>%
+  filter(category == "maturation_early", baseMean.gw > 50) %>%
+  dplyr::select(miRNA = mirna, baseMean.gw, log2FoldChange.gw, padj.gw, sig.both, category) %>%
+  arrange(log2FoldChange.gw) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r, fig.height=3, fig.width=3, message=FALSE, results="asis"}
+#for (i in 1:length(tmp$miRNA)) {
+for (i in 1:10) {
+  this_mirna <- tmp$miRNA[i]
+  
+  cat("  \n###",  this_mirna, "  \n")
+  cat("  \n")
+  cat(paste("base mean (counts): ", round(tmp$baseMean.gw[i], 3), sep=""))
+  cat("  \n")
+  cat(paste("log2 fold change: ", round(tmp$log2FoldChange.gw[i], 3), sep=""))
+  cat("  \n")
+  
+  combined_results_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point(size=1) +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  theme(legend.position = "none", axis.title = element_text(size=10)) +
+  geom_point(data=subset(combined_results_df, mirna == this_mirna), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=1, color=circColor) -> p
+  
+  print(p)
+  
+  # target entrez ids associated with this mirna
+  this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+  
+  # check for no targets found
+  if(length(this_mirna_target_entrez_ids) == 0) {
+    cat("no targets found  \n")
+    this_mirna <- strsplit(this_mirna, "/")[[1]][1]
+    cat("trying ", this_mirna, "  \n")
+    # target entrez ids associated with this mirna
+    this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+    if(length(this_mirna_target_entrez_ids) == 0) {
+      cat("no targets found  \n")
+      cat("  \n")
+      next
+    }
+  }
+  # target names associated with this mirna
+  this_mirna_target_names <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene)
+  #print(head(this_mirna_target_names))
+  
+  # number of target genes in database
+  cat("number of target genes in database: ", length(this_mirna_target_entrez_ids), "  \n")
+  
+  geneList <- factor(as.integer(all_entrez_ids %in% this_mirna_target_entrez_ids))
+  names(geneList) <- all_entrez_ids
+
+  myGOdata <- new("topGOdata",
+                  ontology = "BP",
+                  description = "my data",
+                  allGenes = geneList,
+                  nodeSize = 10,
+                  annotationFun = annFUN.org,
+                  mapping = "org.Hs.eg.db")
+
+  resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+
+  allRes <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 20, orderBy = "classic_fisher")
+  
+  print(kable(allRes))
+  
+  cat("  \n")
+}
+```
+
+
+## Maturation: miRNAs Upregulated Late
+
+```{r}
+combined_results_df %>%
+  filter(category == "maturation_late") %>%
+  dplyr::select(miRNA = mirna, baseMean.gw, log2FoldChange.gw, padj.gw, sig.both, category) %>%
+  arrange(-log2FoldChange.gw) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r}
+combined_results_df %>%
+  filter(category == "maturation_late", baseMean.gw > 50) %>%
+  dplyr::select(miRNA = mirna, baseMean.gw, log2FoldChange.gw, padj.gw, sig.both, category) %>%
+  arrange(-log2FoldChange.gw) -> tmp
+  
+  kable(tmp, digits = 3)
+```
+
+```{r, fig.height=3, fig.width=3, message=FALSE, results="asis"}
+#for (i in 1:length(tmp$miRNA)) {
+for (i in 1:10) {
+  this_mirna <- tmp$miRNA[i]
+  
+  cat("  \n###",  this_mirna, "  \n")
+  cat("  \n")
+  cat(paste("base mean (counts): ", round(tmp$baseMean.gw[i], 3), sep=""))
+  cat("  \n")
+  cat(paste("log2 fold change: ", round(tmp$log2FoldChange.gw[i], 3), sep=""))
+  cat("  \n")
+  
+  combined_results_df %>%
+  ggplot(aes(x=log2FoldChange.gw, y=-log2FoldChange.gzcp, color=category)) +
+  geom_point(size=1) +
+  plotTheme +
+  scale_color_manual(values=cbPalette[c(1,2,4,5,3)]) +
+  theme(legend.position = "none", axis.title = element_text(size=10)) +
+  geom_point(data=subset(combined_results_df, mirna == this_mirna), aes(log2FoldChange.gw, -log2FoldChange.gzcp), shape=21, size=4, stroke=1, color=circColor) -> p
+  
+  print(p)
+  
+  # target entrez ids associated with this mirna
+  this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+  
+  # check for no targets found
+  if(length(this_mirna_target_entrez_ids) == 0) {
+    cat("no targets found  \n")
+    this_mirna <- strsplit(this_mirna, "/")[[1]][1]
+    cat("trying ", this_mirna, "  \n")
+    # target entrez ids associated with this mirna
+    this_mirna_target_entrez_ids <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene_entrez_id)
+    if(length(this_mirna_target_entrez_ids) == 0) {
+      cat("no targets found  \n")
+      cat("  \n")
+      next
+    }
+  }
+  # target names associated with this mirna
+  this_mirna_target_names <- as.character(dplyr::filter(targets, mirna == this_mirna)$target_gene)
+  #print(head(this_mirna_target_names))
+  
+  # number of target genes in database
+  cat("number of target genes in database: ", length(this_mirna_target_entrez_ids), "  \n")
+  
+  geneList <- factor(as.integer(all_entrez_ids %in% this_mirna_target_entrez_ids))
+  names(geneList) <- all_entrez_ids
+
+  myGOdata <- new("topGOdata",
+                  ontology = "BP",
+                  description = "my data",
+                  allGenes = geneList,
+                  nodeSize = 10,
+                  annotationFun = annFUN.org,
+                  mapping = "org.Hs.eg.db")
+
+  resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+
+  allRes <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 20, orderBy = "classic_fisher")
+  
+  print(kable(allRes))
+  
+  cat("  \n")
+}
+```
+
+
+
+
+

@@ -1,0 +1,5 @@
+These scripts were used to create TOPMed imputed genotype files which are prefiltered for mirQTLor samples and filtered for minor allele frequency and homozygous minor/het counts.
+
+mirQTLor samples are similar to mirQTL samples but outliers have been removed (or). Outliers are determined from batch corrected PCA of mirQTL samples.
+
+Scripts filtering of vcf files and converting to plink files (scipts 01 and 02 of mirQTL_imputed_genotyeps) are the same and the data produced by those scripts will be used as the starting point for sample filtering in script 03.

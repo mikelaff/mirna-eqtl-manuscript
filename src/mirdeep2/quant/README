@@ -1,0 +1,21 @@
+Small pipeline for quantification of known and novel mirnas using miRDeep2
+Moving, combining, renaming, and cutting of adapters from fastq files was
+done with already established scripts, see /proj/steinlab/projects/miRNA-eQTL-project/mirna-eqtl/src/mapping:
+00_cp_fastq.sh
+01_cat_fastq.sh
+02_trim_adapters.sh
+
+Files input to mirdeep mapper need to be unzipped.
+
+in 03_mirdeep2_quant_known_and_novel.sh the gzipped adapter trimmed file
+are unzipped and fed into the mapper.pl
+This run of mapper.pl will only collapse reads and process into a .fa file.
+After mapper, quantifier.pl is run to map/quantify reads to known and novel
+mirnas and their precorsors (hairpins).
+
+For 04_mirdeep2_quant_mirbaseV22.sh I used the collapsed reads generated
+in 03_ by the mapper.pl script saving the steps of unzipping and collapsing reads.
+
+At the end, cleaned up files that are large:
+removed *.collapsed.fa, *.trimmed.fastq and *trimmed.fastq.gz
+

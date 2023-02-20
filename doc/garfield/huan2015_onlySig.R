@@ -1,0 +1,92 @@
+# look at garfield results
+
+library(here)
+library(dplyr)
+library(magrittr)
+library(readr)
+library(ggplot2)
+library(mikelaffr)
+
+# OUTPUT FILES #########################################################################################################
+dir.pdf <- here("doc/garfield/pdfs/")
+
+# INPUT FILES ##########################################################################################################
+# mirQTL enrichment on chromHMM using 1000G-EUR maf/ld
+results.txt <- here("results/garfield/hg38-1000G-EUR_huan2015-onlySig_chromHMM/garfield.test.hg38-1000G-EUR_huan2015-onlySig_chromHMM.out")
+# p-value file
+pvalue.txt <- here("results/garfield/hg38-1000G-EUR_huan2015-onlySig_chromHMM/garfield.Meff.hg38-1000G-EUR_huan2015-onlySig_chromHMM.out")
+
+# GLOBALS ##############################################################################################################
+
+
+# Import Data ##########################################################################################################
+df.results <- read_table2(results.txt)
+pvalue.thresh <- as.numeric(strsplit(read_lines(pvalue.txt), "\t")[[2]][2])
+
+# Plot #################################################################################################################
+
+df.results %<>%
+    mutate(Annotation_Name = sapply(strsplit(Annotation, "_"), `[`, 2),
+           Annotation_Sex = sapply(strsplit(Annotation, "_"), `[`, 3),
+           Annotation_Number = as.integer(sapply(strsplit(Annotation, "_"), `[`, 1)),
+           SIG = Pvalue <= pvalue.thresh)
+
+
+
+#pdf(file = paste0(dir.pdf, "mirQTL_pval_chromHMM_annotation_mirQTL-MAFLD_and_1000G-MAFLD_3thresholds.pdf"), width = 10, height = 4)
+
+#
+df.results %>%
+    #filter(SE <= 10) %>%
+    ggplot(aes(x = reorder(Annotation_Name, Annotation_Number), y = Beta, color = Annotation_Sex, alpha = SIG)) +
+    geom_point(position = position_dodge(0.7), shape = 15, size = 1.5) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          legend.position = "bottom") +
+    scale_alpha_manual(values = c(0.3,1)) +
+    scale_color_manual(values = cbPalette) +
+    geom_errorbar(aes(ymin=CI95_lower, ymax=CI95_upper), position = position_dodge(0.7), width = 0.2) +
+    geom_hline(yintercept = 0) +
+    #facet_wrap(~PThresh) +
+    labs(y = "Log Odds Ratio (95% Conf. Int.)",
+         x = "ChromHMM 15-state Mnemonic",
+         color = "Sex",
+         alpha = "Significant Enrichment P-value",
+         title = "GARFIELD: mirQTL Enrichment within Fetal Brain Chromatin States",
+         subtitle = "at 3 mirQTL p-value thresholds",
+         caption = "Annotations with high error (SE>10) removed. Using mirQTL (MIXED ancestry) MAF and LD.")
+
+df.mix.results %>%
+    filter(SE <= 10) %>%
+    ggplot(aes(x = reorder(Annotation_Name, Annotation_Number), y = -log10(Pvalue), fill = Annotation_Sex)) +
+    geom_col(position = "dodge") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          legend.position = "bottom") +
+    scale_fill_manual(values = cbPalette) +
+    geom_hline(aes(yintercept = -log10(mix.pvalue.thresh)), linetype = "dashed") +
+    facet_wrap(~PThresh) +
+    labs(y = "-Log10(P-value)",
+         x = "ChromHMM 15-state Mnemonic",
+         fill = "Sex",
+         title = "GARFIELD: mirQTL Enrichment within Fetal Brain Chromatin States",
+         subtitle = "at 3 mirQTL p-value thresholds",
+         caption = "Annotations with high error (SE>10) removed. Using mirQTL (MIXED ancestry) MAF and LD.")
+
+
+#dev.off()
+
+
+
+tmp %>%
+    #filter(SE <= 10) %>%
+    ggplot(aes(x = Annotation, y = Beta)) +
+    geom_point(position = position_dodge(0.7), shape = 15, size = 1.5) +
+    geom_errorbar(aes(ymin=CI95_lower, ymax=CI95_upper), position = position_dodge(0.7), width = 0.2) +
+    geom_hline(yintercept = 0) +
+    facet_wrap(~PThresh) +
+    labs(y = "Log Odds Ratio (95% Conf. Int.)",
+         color = "Sex",
+         alpha = "Significant Enrichment P-value",
+         title = "GARFIELD: mirQTL Enrichment within Blood miRNA-eQTLs",
+         subtitle = "at 3 mirQTL p-value thresholds",
+         caption = "Using mirQTL (MIXED ancestry) MAF and LD.")
+

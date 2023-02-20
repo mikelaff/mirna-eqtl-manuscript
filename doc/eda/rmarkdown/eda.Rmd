@@ -1,0 +1,406 @@
+---
+title: "Fetal Tissue miRNA EDA"
+author: "Mike Lafferty"
+date: "9/11/2018"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(dplyr)
+library(magrittr)
+library(DESeq2)
+library(ggplot2)
+library(GGally)
+library(limma)
+library(reshape2)
+
+source(here("src/utils/lafferty_utils.R"))
+```
+
+## Build DDS
+
+```{r}
+# INPUT FILES #####################################################################################
+# summarized experiment with mirge2.0 quantified mirna counts from mirbase v22
+mirbase_se_rds <- here("results/rdata_files/20180906_mirbase_v22_mirge2.0_counts.rds")
+
+# Build DDS #######################################################################################
+# read in summarized experiment
+se <- readRDS(mirbase_se_rds)
+
+# label outliers by PCA (after batch effect removal of pool and rna purif. method, see below)
+outlier_rnaid <- c("RNAID1710", "RNAID1744", "RNAID1698", "RNAID1814", "RNAID1678")
+colData(se)$outlier <- ifelse(colData(se)$rnaid %in% outlier_rnaid, "yes", "no")
+
+# build DESeq data set
+dds <- DESeqDataSet(se, design = ~1)
+# remove rows with only zero counts
+dds <- dds[rowSums(counts(dds)) > 1, ]
+# estimate size factors for normalization
+dds <- estimateSizeFactors(dds)
+# norm. transformed counts (DESeq size factors, log2 transformed)
+#ntc <- assay(normTransform(dds))
+# variance stabilizing tranformed data
+vsd <- varianceStabilizingTransformation(dds)
+rm(se)
+```
+
+## Sequencing and Library Depth
+
+```{r}
+df <- as.data.frame(colData(dds))
+
+ggplot(df, aes(x=reorder(rnaid, reads_per_sample), y=reads_per_sample/1e6, fill=tissue_section)) +
+  geom_bar(stat = "identity", position = position_dodge(0),width = 1) +
+  labs(x="240 Samples",
+       y="Reads per Sample (million reads)",
+       #title="Sequencing Depth per Sample",
+       fill="Tissue\nSection") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 90)) +
+  plotTheme +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  scale_fill_manual(values=c("grey70", "blue", "darkorange"))
+
+tmp <- data.frame(rnaid=colData(dds)$rnaid, tot_counts=colSums(counts(dds)))
+df <- left_join(df, tmp, by = "rnaid")
+
+ggplot(df, aes(x=reorder(rnaid, tot_counts), y=tot_counts/1e6, fill=tissue_section)) +
+  geom_bar(stat = "identity", position = position_dodge(0),width = 1) +
+  labs(x="240 Samples",
+       y="miRNA Counts per Sample (million counts)",
+       #title="miRNA Counts per Sample",
+       fill="Tissue\nSection") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 5.5)) +
+  plotTheme +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  scale_fill_manual(values=c("grey50", "blue", "darkorange"))
+
+ggplot(df, aes(x=reads_per_sample/1e6, y=tot_counts/1e6, col=tissue_section)) +
+  geom_point() +
+  labs(x="Reads per Sample (million reads)",
+       y="miRNA Counts per Sample (million counts)",
+       col="Tissue\nSection") +
+  plotTheme +
+  scale_color_manual(values=c("grey50", "blue", "darkorange"))
+
+ggplot(df, aes(y=`sizeFactor`, x=reads_per_sample/1e6, col=tissue_section)) +
+  geom_point() +
+  labs(x="Reads per Sample (million reads)",
+       y="DESeq2 Size Factor",
+       col="Tissue\nSection") +
+  plotTheme +
+  scale_color_manual(values=c("grey50", "blue", "darkorange"))
+```
+
+## PCA
+
+### Center=TRUE, Scale=FALSE
+
+```{r}
+pca <- prcomp(t(assay(vsd)), center = TRUE, scale. = FALSE)
+df <- data.frame(pca$x[,1:2], colData(vsd))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+df %>%
+  ggplot(aes(PC1, PC2, color=tissue_section)) +
+  geom_point() +
+  labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+       y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+  plotTheme +
+  scale_color_manual(values=c("gray50", "navy", "darkorange")) +
+  labs(title="Mirge Expression (VST Norm.)",
+       caption="center = TRUE, scale. = FALSE")
+```
+
+### Center=TRUE, Scale=TRUE
+
+```{r}
+pca <- prcomp(t(assay(vsd)), center = TRUE, scale. = TRUE)
+df <- data.frame(pca$x[,1:2], colData(vsd))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+df %>%
+  ggplot(aes(PC1, PC2, color=tissue_section)) +
+  geom_point() +
+  labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+       y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+  plotTheme +
+  scale_color_manual(values=c("gray50", "navy", "darkorange")) +
+  labs(title="Mirge Expression (VST Norm.)",
+       caption="center = TRUE, scale. = TRUE")
+```
+
+## All Covariates
+
+```{r}
+colnames(df)
+```
+
+### PC1 v PC2
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x="PC1", y="PC2", color=variable)) +
+    geom_point(size=2) +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme +
+    theme(legend.position = "bottom") +
+    labs(title="PCA: miRNA Expression") -> p
+    
+    print(p)
+}
+```
+
+### PC1 v Covariate
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="PC1")) +
+    geom_point(size=2) +
+    labs(y=paste("PC1 (", round(percentVar[1], 1), "%)", sep="")) +
+    plotTheme +
+    labs(title="PCA: miRNA Expression") -> p
+    
+    print(p)
+}
+```
+
+
+## Remove Batch Effect: Pool
+
+```{r}
+# remove seq. pool
+vsd.trans <- vsd
+assay(vsd.trans) <- limma::removeBatchEffect(assay(vsd),
+                                             batch = vsd$sequencing_pool,
+                                             design = model.matrix(~vsd$gestation_week))
+
+# PCA analysis (scale = FALSE)
+pca <- prcomp(t(assay(vsd.trans)), center = TRUE, scale. = FALSE)
+df <- data.frame(pca$x[,1:5], colData(vsd.trans))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+```
+
+### PC1 v PC2
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x="PC1", y="PC2", color=variable)) +
+    geom_point(size=2) +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme +
+    theme(legend.position = "bottom") +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool)") -> p
+    
+    print(p)
+}
+```
+
+### PC1 v Covariate
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="PC1")) +
+    geom_point(size=2) +
+    geom_smooth(method = "lm") +
+    labs(y=paste("PC1 (", round(percentVar[1], 1), "%)", sep="")) +
+    plotTheme +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool)") -> p
+    
+    print(p)
+}
+```
+
+### PC2 v Covariate
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="PC2")) +
+    geom_point(size=2) +
+    geom_smooth(method = "lm") +
+    labs(y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool)") -> p
+    
+    print(p)
+}
+```
+
+
+## Remove Batch Effect: Pool and RNA Purification Method
+
+```{r}
+# remove seq. pool
+vsd.trans <- vsd
+assay(vsd.trans) <- limma::removeBatchEffect(assay(vsd),
+                                             batch = vsd$sequencing_pool,
+                                             batch2 = vsd$rna_purification_method,
+                                             design = model.matrix(~vsd$gestation_week))
+
+# PCA analysis (scale = FALSE)
+pca <- prcomp(t(assay(vsd.trans)), center = TRUE, scale. = FALSE)
+df <- data.frame(pca$x[,1:5], colData(vsd.trans), let7b5p_exp = as.vector(assay(vsd.trans["hsa-let-7b-5p",])), let7b3p_exp = as.vector(assay(vsd.trans["hsa-let-7b-3p",])))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+```
+
+### let-7b Expression
+
+```{r}
+df %>%
+  arrange(outlier) %>%
+  ggplot(aes(x=gestation_week, y=let7b5p_exp, color=outlier)) +
+  geom_point(size=2) +
+  plotTheme +
+  scale_color_manual(values=c("grey60", "darkorange"))
+
+df %>%
+  arrange(outlier) %>%
+  ggplot(aes(x=gestation_week, y=let7b3p_exp, color=outlier)) +
+  geom_point(size=2) +
+  plotTheme +
+  scale_color_manual(values=c("grey60", "darkorange"))
+
+df %>%
+  arrange(outlier) %>%
+  ggplot(aes(x=let7b5p_exp, y=let7b3p_exp, color=outlier)) +
+  geom_point(size=2) +
+  plotTheme +
+  scale_color_manual(values=c("grey60", "darkorange"))
+```
+
+```{r, fig.height=10, fig.width=10}
+p <- ggpairs(df,
+             columns = c("PC1", "PC2", "PC3", "PC4", "PC5", "let7b3p_exp", "gestation_week", "rin", "sequencing_pool", "sex"),
+             upper = list(continuous = wrap(my_custom_cor, sizeRange = c(4,4))),
+             lower = list(continuous = wrap(my_custom_smooth)),
+             diag = list(continuous = wrap(my_custom_density))) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_text(size = 18, face = "bold"))
+print(p)
+```
+
+#### let-7b-3p
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="let7b3p_exp")) +
+    geom_point(size=2, mapping=aes(color=outlier)) +
+    geom_smooth(method = "lm") +
+    plotTheme +
+    labs(caption="limma::removeBatchEffect(sequencing_pool, rna_purification_method)") +
+    scale_color_manual(values = c("grey60", "darkorange")) -> p
+    
+    print(p)
+}
+```
+
+#### let-7b-5p
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="let7b5p_exp")) +
+    geom_point(size=2, mapping=aes(color=outlier)) +
+    geom_smooth(method = "lm") +
+    plotTheme +
+    labs(caption="limma::removeBatchEffect(sequencing_pool, rna_purification_method)") +
+    scale_color_manual(values = c("grey60", "darkorange")) -> p
+    
+    print(p)
+}
+```
+
+
+### Top miRNAs in PC1 and PC2
+
+```{r}
+loading_scores_pc1 <- sort(abs(pca$rotation[,1]), decreasing = TRUE)
+top20genesPC1_diff <- names(loading_scores_pc1[1:20])
+top20genesPC1_diff
+```
+
+```{r}
+loading_scores_pc2 <- sort(abs(pca$rotation[,2]), decreasing = TRUE)
+top20genesPC2_diff <- names(loading_scores_pc1[1:20])
+top20genesPC2_diff
+```
+
+
+### PC1 v PC2
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x="PC1", y="PC2", color=variable)) +
+    geom_point(size=2) +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme +
+    theme(legend.position = "bottom") +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool, rna_purification_method)") -> p
+    
+    print(p)
+}
+```
+
+### PC1 v Covariate
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="PC1")) +
+    geom_point(size=2, mapping=aes(color=outlier)) +
+    geom_smooth(method = "lm") +
+    labs(y=paste("PC1 (", round(percentVar[1], 1), "%)", sep="")) +
+    plotTheme +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool, rna_purification_method)") +
+    scale_color_manual(values = c("grey60", "darkorange")) -> p
+    
+    print(p)
+}
+```
+
+### PC2 v Covariate
+
+```{r, fig.width=9, fig.height=9}
+for (variable in colnames(df)) {
+  df %>%
+    ggplot(aes_string(x=variable, y="PC2")) +
+    geom_point(size=2, mapping=aes(color=outlier)) +
+    geom_smooth(method = "lm") +
+    labs(y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme +
+    labs(title="PCA: miRNA Expression",
+         caption="limma::removeBatchEffect(sequencing_pool, rna_purification_method)") +
+    scale_color_manual(values = c("grey60", "darkorange")) -> p
+    
+    print(p)
+}
+```
+
+
+
+
+

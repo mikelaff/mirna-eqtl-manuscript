@@ -1,0 +1,12 @@
+GARFIELD v2 was downloaded from: https://www.ebi.ac.uk/birney-srv/GARFIELD/
+
+Decompressed and compiled into the directory garfield-v2
+
+The script at garfield-v2/garfield runs the analysis. Each unique analysis was run with a new script, modified for relevant inputs, within the garfield-v2 direcotry.
+
+Additional scripts to create the input files are also in this directory.
+
+Generally input data is located at data/garfield-data/
+Generally output is directed to results/garfield/
+
+

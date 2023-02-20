@@ -1,0 +1,390 @@
+---
+title: "mirQTL EDA"
+author: "Mike Lafferty"
+date: "1/26/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r echo=TRUE, message=FALSE}
+library(here)
+library(dplyr)
+library(readr)
+library(readxl)
+library(magrittr)
+library(ggplot2)
+library(DESeq2)
+library(GenomicRanges)
+library(RColorBrewer)
+library(mikelaffr)
+
+# OUTPUT ################################
+dir.pdfs <- here("doc/mirQTL_eda/pdfs/")
+
+# INPUT #################################
+# eQTLs
+eqtls.dataframe.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_eQTLs_dataFrame.rds")
+eqtls.granges.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_eQTLs_GRanges.rds")
+
+# eSNPs
+esnps.dataframe.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_eSNPs_dataFrame.rds")
+eqtls.granges.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_eSNPs_GRanges.rds")
+
+# emiRs
+emirs.dataframe.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_emiRs_dataFrame.rds")
+emirs.granges.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_emiRs_GRanges.rds")
+
+# Summarized association results for every variant within 1MB of each expressed miRNA
+summarized.results.dataframe.rds <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_variants_dataFrame.rds")
+
+# nominal p-value threshold
+nom.p.val.txt <- here("results/emmax/association_results/20200120_mirQTLor/compiled/20200120_mirQTLor_nomPvalue.txt")
+
+# summarized experiment with vst expression values used in this analysis
+vsd.rds <- here("results/emmax/phenotype_files/20200120_mirQTLor_VST_miRNA_expression_residual/20200120_mirQTLor_VST_miRNA_expression_and_residual_rse.rds")
+
+# GRanges of known and novel miRNAs
+gr.mirna.rds <- here("data/gtf_and_granges/20200227_all_known_and_novel_mirna_non_overlapping_granges.rds")
+
+# summarized experiment with gene expression data
+rse.gene.rds <- here("results/rdata_files/20190505_rse_gene_counts.rds")
+
+# Huan et. al. 2015, eQTLs (not corrected for cell type?)
+huan.eqtls.xlsx <- here("data/huan_2015/41467_2015_BFncomms7601_MOESM1319_ESM.xlsx")
+
+# GLOBALS ##############################
+CHROMS <- c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10", "chr11", "chr12",
+            "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chr20", "chr21", "chr22", "chrX")
+```
+
+## Summary
+
+```{r}
+# Import
+df.eqtls <- readRDS(eqtls.dataframe.rds)
+```
+
+Number of eQTLs: `r sum(!duplicated(df.eqtls$eQTL))`  
+
+Number of emiRs: `r sum(!duplicated(df.eqtls$emiR))`  
+
+Number of eSNPs: `r sum(!duplicated(df.eqtls$eSNP))`  
+
+## miRNA Expression Data
+
+```{r}
+# Import
+vsd <- readRDS(vsd.rds)
+
+# expressed mirnas that have more than one primary mirna
+expressed.mirna.names.with.multiple.pri.mirs <- unique(rowRanges(vsd)$Name[duplicated(rowRanges(vsd)$Name)])
+
+# eqtl emiRs with more than one primary mirna
+df.eqtls$MULTIPLE.PRIMIRS <- df.eqtls$NAME %in% expressed.mirna.names.with.multiple.pri.mirs
+
+df.tmp <- df.eqtls[!df.eqtls$MULTIPLE.PRIMIRS, ]
+```
+
+*Post filtering out emiRs with multiple primary miRNAs:* 
+
+Number of eQTLs: `r sum(!duplicated(df.tmp$eQTL))`  
+
+Number of emiRs: `r sum(!duplicated(df.tmp$emiR))`  
+
+Number of eSNPs: `r sum(!duplicated(df.tmp$eSNP))`  
+
+
+## Gene Expression Data
+
+```{r}
+# Import
+rse.gene <- readRDS(rse.gene.rds)
+
+# subset samples to those in vsd.mirna
+rse.gene <- rse.gene[,colnames(vsd)]
+
+# set seqnames for gene expression to UCSC
+seqlevelsStyle(rse.gene) <- "UCSC"
+genome(rse.gene) <- "hg38"
+# remove non-standard chroms
+seqlevels(rse.gene, pruning.mode = "coarse") <- CHROMS
+
+# remove biotype = mirna
+rse.gene <- rse.gene[rowRanges(rse.gene)$gene_biotype != "miRNA"]
+
+# filter for expression
+#rse.gene <- rse.gene[rowSums(assay(rse.gene) > 20) > 10,]
+
+# normalize expression (VST)
+dds.gene <- DESeqDataSet(rse.gene, design = ~1)
+vsd.gene <- vst(dds.gene)
+```
+
+## Known and Novel miRNAs
+
+```{r}
+# Import
+gr.mirna <- readRDS(gr.mirna.rds)
+
+# expressed primary mirnas
+gr.expr.pri.mirna <-  gr.mirna[ gr.mirna$ID %in% rowRanges(vsd)$Derives_from ]
+
+# remove non-standard chroms
+seqlevels(gr.expr.pri.mirna, pruning.mode = "coarse") <- CHROMS
+
+```
+
+## Host Genes
+
+```{r}
+hits.expr.pri.mirna.TO.genes <- findOverlaps(gr.expr.pri.mirna, vsd.gene, type = "within")
+
+#length(unique(queryHits(hits.expr.pri.mirna.TO.genes)))
+
+df.expr.pri.mirna.with.host <- as_tibble(gr.expr.pri.mirna[queryHits(hits.expr.pri.mirna.TO.genes)])
+df.expr.pri.mirna.with.host %<>%
+    dplyr::rename(seqnames.primir = seqnames,
+                  start.primir = start,
+                  end.primir = end,
+                  width.primir = width,
+                  strand.primir = strand)
+
+df.host.genes <- as_tibble(rowRanges(rse.gene)[subjectHits(hits.expr.pri.mirna.TO.genes)])
+df.host.genes %<>%
+    dplyr::rename(seqnames.gene = seqnames,
+                  start.gene = start,
+                  end.gene = end,
+                  width.gene = width,
+                  strand.gene = strand)
+
+df.expr.pri.mirna.TO.hosts <- bind_cols(df.expr.pri.mirna.with.host, df.host.genes)
+
+
+
+# how many possible host genes per pri-miR
+df.expr.pri.mirna.TO.hosts %>%
+    group_by(UniqueName) %>%
+    summarise(count = as.integer(n())) %>%
+    ggplot(aes(x=count)) +
+    geom_histogram(bins = 3) +
+    scale_x_continuous(breaks = c(0,1,2,3))
+
+data.frame(numHosts = c("0", "1", "2", "3"), count = c(458, 421, 27, 1)) %>%
+    ggplot(aes(x=numHosts, y = count)) +
+    geom_col() +
+    labs(x = "Number of Hosts") +
+    plotTheme(theme = "presentation")
+ggsave("~/Desktop/num_hosts.pdf", height = 5, width = 7)
+```
+
+```{r}
+df.gene.expr <- data.frame(gene.expr = rowMeans( assay(vsd.gene) ), gene_id = names(rowMeans( assay(vsd.gene) )), stringsAsFactors = FALSE)
+
+df.expr.pri.mirna.TO.hosts <- left_join(df.expr.pri.mirna.TO.hosts, df.gene.expr, by = "gene_id")
+
+df.dups <- df.expr.pri.mirna.TO.hosts[duplicated(df.expr.pri.mirna.TO.hosts$ID) | duplicated(df.expr.pri.mirna.TO.hosts$ID, fromLast = TRUE), ]
+
+
+# for each miRNA with a host gene, does its expression correlate with the host gene
+
+# mature mirnas with hosts
+
+df.mirna <- data.frame(ID = rowRanges(vsd)$ID, uniName = rownames(vsd), stringsAsFactors = FALSE)
+
+df.mirna$primir <- gr.mirna$Derives_from[match(df.mirna$ID, gr.mirna$ID)]
+
+df.mirna <- left_join(df.mirna, df.expr.pri.mirna.TO.hosts, by = c("primir" = "ID"))
+
+df.mirna <- df.mirna[!is.na(df.mirna$gene_id),]
+
+df.mirna.expr <- data.frame(mirna.expr = rowMeans( assay(vsd) ), uniName = names(rowMeans( assay(vsd) )), stringsAsFactors = FALSE)
+df.mirna <- left_join(df.mirna, df.mirna.expr, by = "uniName")
+
+all(colnames(vsd) == colnames(vsd.gene))
+
+mat.mirna.expr <- assay(vsd)[df.mirna$uniName,]
+mat.gene.expr <- assay(vsd.gene)[df.mirna$gene_id,]
+
+df.mirna$corr <- sapply(1:dim(mat.mirna.expr)[1], function(i) cor(mat.mirna.expr[i,], mat.gene.expr[i,]))
+
+df.mirna$corr[is.na(df.mirna$corr)] <- 0
+
+df.mirna$eqtl <- df.mirna$uniName %in% df.eqtls$emiR
+```
+
+```{r}
+df.mirna %>%
+    ggplot(mapping = aes(x = gene.expr, y = mirna.expr, color = corr)) +
+    geom_point() +
+    #geom_line(aes(group = uniName)) +
+    labs(y = "Mean miRNA Expression (VST)",
+         x = "Mean Host Gene Expression (VST)",
+         title = "miRNA-Host Expression Correlation",
+         color = "Pearson Corr.") +
+    scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0)
+
+df.mirna %>%
+    ggplot(mapping = aes(x = corr)) +
+    geom_histogram(bins = 30) +
+    labs(x = "miRNA-Host Expression Correlation") +
+    plotTheme("presentation")
+
+ggsave("~/Desktop/host_corr.pdf", height = 5, width = 7)
+
+#ggsave(paste0(dir.pdfs, "mirna_host_expression_correlation.pdf"))
+
+df.mirna %>%
+    dplyr::filter(eqtl) %>%
+    ggplot(mapping = aes(x = gene.expr, y = mirna.expr, color = corr)) +
+    geom_point() +
+    #geom_line(aes(group = uniName)) +
+    labs(y = "Mean emiR Expression (VST)",
+         x = "Mean Host Gene Expression (VST)",
+         title = "emiR-Host Expression Correlation",
+         color = "Pearson Corr.") +
+    scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0)
+
+df.mirna %>%
+    dplyr::filter(eqtl) %>%
+    ggplot(mapping = aes(x = corr)) +
+    geom_histogram(bins = 30) +
+    labs(x = "emiR-Host Expression Correlation")
+
+#ggsave(paste0(dir.pdfs, "emir_host_expression_correlation.pdf"))
+```
+
+```{r}
+# expression of all host genes
+df.expr.pri.mirna.TO.hosts %>%
+    ggplot(aes(x=gene.expr)) +
+    geom_histogram()
+
+# considered expression host genes
+df.expr.pri.mirna.TO.hosts$gene.is.expressed <- df.expr.pri.mirna.TO.hosts$gene.expr > 4
+
+expressed.pri.mirnas.with.expressed.host.genes <- unique(df.expr.pri.mirna.TO.hosts$Name[df.expr.pri.mirna.TO.hosts$gene.is.expressed])
+```
+
+## Distance
+
+```{r}
+
+df.eqtls$distance_eSNP_emiR <- NA
+
+# loop over each eQTL
+for (i in 1:nrow(df.eqtls)) {
+    
+    
+    if (df.eqtls$miR.STRAND[i] == "+") {           # positive strand emiR
+        
+        # distance to emiR start
+        df.eqtls$distance_eSNP_emiR[i] <- df.eqtls$SNP.BP.hg38[i] - df.eqtls$miR.START.hg38[i]
+        
+    } else if (df.eqtls$miR.STRAND[i] == "-") {    # negative strand emiR
+        
+        # distance to emiR end
+        df.eqtls$distance_eSNP_emiR[i] <- df.eqtls$miR.END.hg38[i] - df.eqtls$SNP.BP.hg38[i]
+        
+    } else {
+        stop("Strand not known!")
+    }
+}
+```
+
+```{r}
+
+# eqtls with expressed host genes
+df.eqtls$HOST.EXPRESSED <- df.eqtls$DERIVES_FROM_NAME %in% expressed.pri.mirnas.with.expressed.host.genes
+
+df.eqtls %>%
+    ggplot(aes(x = HOST.EXPRESSED, fill = HOST.EXPRESSED)) +
+    geom_histogram(stat = "count") +
+    scale_fill_manual(values = cbPalette) +
+    plotTheme("presentation", legend.position = "none")
+
+ggsave("~/Desktop/eqtl_by_host.pdf", height = 5, width = 7)
+
+
+
+df.eqtls %>%
+    ggplot(aes(x = distance_eSNP_emiR)) +
+    geom_histogram(bins = 30) +
+    labs(x = "Distance: eSNP to emiR (bp)") +
+    plotTheme("presentation")
+
+ggsave("~/Desktop/eqtl_distance.pdf", height = 5, width = 7)
+
+
+df.eqtls %>%
+    filter(abs(distance_eSNP_emiR) < 1e5) %>%
+    ggplot(aes(x = distance_eSNP_emiR)) +
+    geom_histogram(bins = 30)
+
+df.eqtls %>%
+    ggplot(aes(x = distance_eSNP_emiR, fill = HOST.EXPRESSED)) +
+    geom_histogram(bins = 30) +
+    facet_wrap(~HOST.EXPRESSED) +
+    scale_fill_manual(values = cbPalette) +
+    labs(x = "Distance: eSNP to emiR (bp)") +
+    plotTheme("presentation") +
+    theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5))
+ggsave("~/Desktop/eqtl_distance_by_host.pdf", height = 5, width = 9)
+
+```
+
+```{r}
+df.eqtls %>%
+    filter(!MULTIPLE.PRIMIRS) %>%
+    ggplot(aes(x = distance_eSNP_emiR)) +
+    geom_histogram(bins = 30)
+
+df.eqtls %>%
+    filter(!MULTIPLE.PRIMIRS) %>%
+    filter(abs(distance_eSNP_emiR) < 1e5) %>%
+    ggplot(aes(x = distance_eSNP_emiR)) +
+    geom_histogram(bins = 30)
+
+df.eqtls %>%
+    filter(!MULTIPLE.PRIMIRS) %>%
+    ggplot(aes(x = distance_eSNP_emiR, fill = HOST.EXPRESSED)) +
+    facet_wrap(~HOST.EXPRESSED) +
+    geom_histogram(bins = 30) +
+    scale_fill_manual(values = cbPalette)
+```
+
+
+## Huan 2015 eQTLs
+
+```{r}
+# Import
+df.huan <- read_xlsx(huan.eqtls.xlsx, skip = 1)
+
+# Huan emiRs?
+df.huan %>%
+    select(hsa_miR_name, Chr.miR, miR.Start, miR.End, miR.strand, miRNA_alter_ID, miR_Type) %>%
+    distinct() -> df.huan.emirs
+
+
+df.huan.emirs$hsa_miR_name[!df.huan.emirs$hsa_miR_name %in% gr.mirna$Name]
+
+gr.mirna[grepl("hsa-miR-133a", gr.mirna$Name)]
+
+```
+
+
+
+```{r}
+df.eqtls[df.eqtls$NAME %in% df.huan.emirs$hsa_miR_name,]
+
+emirs <- unique(df.eqtls$emiR)
+
+```
+
+
+
+

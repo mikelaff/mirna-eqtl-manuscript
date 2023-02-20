@@ -1,0 +1,508 @@
+---
+title: "HNP Differentiation Microarray Differential Expression: GO Analysis"
+author: "Mike Lafferty"
+date: "2022-09-21"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=TRUE, echo=TRUE, message=FALSE, class.source = "fold-show", warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(magrittr)
+library(ggplot2)
+library(ggrepel)
+
+library(Biobase)
+library(pd.clariom.s.human.ht)
+library(clariomshumantranscriptcluster.db)
+library(oligo)
+
+library(limma)
+
+library(topGO)
+library(org.Hs.eg.db)
+
+library(multiMiR)
+library(miRNAtap)
+
+library(ComplexHeatmap)
+
+library(mikelaffr)
+library(knitr)
+
+# OUTPUT #############################################################
+dir.pdfs <- here("doc/microarray/pdfs/")
+dir.create(dir.pdfs, recursive = TRUE, showWarnings = FALSE)
+
+dir.topgo <- here("doc/microarray/topgo/")
+dir.create(dir.topgo, recursive = TRUE, showWarnings = FALSE)
+# INPUT ##############################################################
+# Microarray ExpressionSet for HNP Differentiataion Experiment, normalized, probe filtered
+expressionSet.rds <- here("results/rdata_files/20220829_es_HNP_Differential_Microarray_SST-RMA.rds")
+
+# single cell data from luis at UCLA showing genes upregulated in cell type clusters
+#genes.by.cluster.xlsx <- here("data/ucla_single_cell/TableS4 Cluster analysis.xlsx")
+
+# TargetScan 8.0 Predicted Targets for miR-4707-3p
+targetScan8.0.mir4707.targets.txt <- here("data/target_predictions/TargetScan8.0_miR-4707-3p.predicted_targets.txt")
+
+# miRDB v6.0 Target Predictions
+miRDB6.0.target.predictions.txt <- here("data/target_predictions/miRDB_v6.0_prediction_result.txt.gz")
+
+# miRTarBase v7 Validated Target Interactions
+miRTarBase7.target.interactions.xlsx <- here("data/mirtarbase_v7/hsa_MTI.xlsx")
+
+# GLOBALS ############################################################
+```
+
+## Differential Expression
+
+```{r, class.source = "fold-show"}
+# Import ExpressionSet
+eSet <- readRDS(expressionSet.rds)
+
+# add condition label
+eSet$Condition <- paste(eSet$Timepoint, eSet$Expression, sep = "_")
+
+# remove outliers
+filt.eSet <- eSet[,!eSet$outlier]
+
+# corrected expression for plotting
+corrected.expression <- limma::removeBatchEffect(filt.eSet,
+                                                 covariates = filt.eSet$cDNA_Yield_ug,
+                                                 design = model.matrix(~filt.eSet$Timepoint + filt.eSet$Expression))
+
+# conduct differential expression primarily based on the 4 condition groups
+condition <- factor(filt.eSet$Condition)
+
+# include cDNA_yield in the model matrix
+design <- model.matrix(~ 0 + filt.eSet$cDNA_Yield_ug + condition)
+colnames(design) <- c("cDNA_yield", levels(condition))
+
+# fit to the expression data
+fit <- limma::lmFit(filt.eSet, design)
+
+# contrasts based on expression (contrl v 4707) or differentiation (week1 v week2)
+cont.matrix <- makeContrasts(Expression_in_Week1 = Week1_Control-Week1_4707,
+                             Expression_in_Week2 = Week2_Control-Week2_4707,
+                             Diff_in_Control = Week2_Control-Week1_Control,
+                             Diff_in_4707 = Week2_4707-Week1_4707,
+                             Interaction = (Week2_Control-Week2_4707)-(Week1_Control-Week1_4707),
+                             levels = design)
+
+# fit for contrasts
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+# results tables
+df.results.expression_in_week1 <- as_tibble(topTable(fit2, coef = "Expression_in_Week1", number=Inf, adjust.method = "BH"))
+df.results.expression_in_week2 <- as_tibble(topTable(fit2, coef = "Expression_in_Week2", number=Inf, adjust.method = "BH"))
+df.results.diff_in_control <- as_tibble(topTable(fit2, coef = "Diff_in_Control", number=Inf, adjust.method = "BH"))
+df.results.diff_in_4707 <- as_tibble(topTable(fit2, coef = "Diff_in_4707", number=Inf, adjust.method = "BH"))
+df.results.interaction <- as_tibble(topTable(fit2, coef = "Interaction", number=Inf, adjust.method = "BH"))
+
+
+rm(condition, design, fit, cont.matrix)
+```
+
+**Differentiation:**  
+__+LFC__: upregulated in week 2 (neuron markers?)  
+__-LFC__: upregulated in week 1 (progenitor markers?)  
+
+**Expression:**  
+__+LFC__: upregulated in CONTROL (repressed by mir4707?)  
+__-LFC__: upregulated in mir4707 induced  
+
+
+## miR-4707-3p Targets
+
+```{r, class.source = "fold-show", message=FALSE}
+df.targetScan.predictions <- read_tsv(targetScan8.0.mir4707.targets.txt)
+
+df.mirdb.predictions <- read_tsv(miRDB6.0.target.predictions.txt, col_names = c("miRNA_Name", "GenBank", "Target_Score", "ENTREZID"))
+df.mirdb.predictions %<>%
+    filter(miRNA_Name == "hsa-miR-4707-3p") %>%
+    filter(!duplicated(ENTREZID)) %>%
+    mutate(ENTREZID = as.character(ENTREZID))
+
+anno <- AnnotationDbi::select(org.Hs.eg.db,
+                              keys = df.mirdb.predictions$ENTREZID,
+                              keytype = "ENTREZID",
+                              columns = c("SYMBOL"))
+
+df.mirdb.predictions %<>%
+    left_join(anno, by = "ENTREZID")
+
+df.mirtarbase.interactions <- read_xlsx(miRTarBase7.target.interactions.xlsx)
+df.mirtarbase.interactions %<>%
+    filter(miRNA == "hsa-miR-4707-3p") %>%
+    filter(!duplicated(`Target Gene`))
+
+rm(anno)
+```
+
+**miRDB Predicted Targets**: 46  
+
+**TargetScan Predicted Targets**: 1758  
+
+**miRTarBase Validated Interactions**: 104  
+
+
+## Expression Categories
+
+```{r}
+# all expressed genes
+all.genes <- fData(filt.eSet)$SYMBOL
+
+# combine expression data into one dataframe
+
+df.results.diff_in_control %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.diff_in_4707 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.expression_in_week1 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.expression_in_week2 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.interaction %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.diff <- left_join(df.results.diff_in_control, df.results.diff_in_4707,
+                             by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"),
+                             suffix = c(".diff_in_control", ".diff_in_4707"))
+
+
+df.results.expression <- left_join(df.results.expression_in_week1, df.results.expression_in_week2,
+                                   by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"),
+                                   suffix = c(".expression_in_week1", ".expression_in_week2"))
+
+df.results <- left_join(df.results.diff, df.results.expression,
+                        by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"))
+
+df.results.interaction %>%
+    dplyr::select(PROBEID,
+                  logFC.interaction = logFC,
+                  AveExpr.interaction = AveExpr,
+                  t.interaction = t,
+                  P.Value.interaction = P.Value,
+                  adj.P.Val.interaction = adj.P.Val,
+                  B.interaction = B,
+                  Sig_at_0.05.interaction = Sig_at_0.05,
+                  Sig_at_0.1.interaction = Sig_at_0.1) -> df.results.int
+
+df.results %<>%
+    left_join(df.results.int, by = "PROBEID")
+
+df.results %<>%
+    mutate(miRDB_predicted_target = SYMBOL %in% df.mirdb.predictions$SYMBOL,
+           TargetScan_predicted_target = SYMBOL %in% df.targetScan.predictions$`Target gene`,
+           miRTarBase_validated_target = SYMBOL %in% df.mirtarbase.interactions$`Target Gene`)
+
+rm(df.results.int)
+```
+
+
+```{r}
+# categorize each gene based on the 4 differential expression relationships, using "flags" at each category
+# Flag1: Differentiation DE (week1 v week2) in CONTROL
+# Flag2: Differentiation DE (week1 v week2) in 4707
+# Flag3: Expression DE (Ctrl v 4707) in Week1
+# Flag4: Expression DE (Ctrl v 4707) in Week2
+
+# Flags based on direction of logFC (LFC) and whether there is a significant difference
+# -: negative LFC
+# 0: non-significant LFC
+# +: positive LFC
+
+# example flag: -0+0
+# negative LFC for differentiation in CTRL, non-sig LFC for diff in 4707, positive lFC for expression in week1, non-sig LFC for expression in week2
+
+
+df.results %<>%
+    mutate(DE_flag_at_0.05 = NA,
+           DE_flag_at_0.1 = NA)
+
+# loop over each gene and calculate flag
+for (i in 1:nrow(df.results)) {
+    flag_at_0.05 <- ""
+    flag_at_0.1 <- ""
+    
+    # Flag1: Differentiation DE (week1 v week2) in CONTROL
+    if (!df.results$Sig_at_0.05.diff_in_control[i]) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "0")
+    } else if (df.results$logFC.diff_in_control[i] < 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "-")
+    } else if (df.results$logFC.diff_in_control[i] > 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "+")
+    }
+    
+    if (!df.results$Sig_at_0.1.diff_in_control[i]) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "0")
+    } else if (df.results$logFC.diff_in_control[i] < 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "-")
+    } else if (df.results$logFC.diff_in_control[i] > 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "+")
+    }
+    
+    # Flag2: Differentiation DE (week1 v week2) in 4707
+    if (!df.results$Sig_at_0.05.diff_in_4707[i]) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "0")
+    } else if (df.results$logFC.diff_in_4707[i] < 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "-")
+    } else if (df.results$logFC.diff_in_4707[i] > 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "+")
+    }
+    
+    if (!df.results$Sig_at_0.1.diff_in_4707[i]) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "0")
+    } else if (df.results$logFC.diff_in_4707[i] < 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "-")
+    } else if (df.results$logFC.diff_in_4707[i] > 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "+")
+    }
+    
+    # Flag3: Expression DE (Ctrl v 4707) in Week1
+    if (!df.results$Sig_at_0.05.expression_in_week1[i]) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "0")
+    } else if (df.results$logFC.expression_in_week1[i] < 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "-")
+    } else if (df.results$logFC.expression_in_week1[i] > 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "+")
+    }
+    
+    if (!df.results$Sig_at_0.1.expression_in_week1[i]) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "0")
+    } else if (df.results$logFC.expression_in_week1[i] < 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "-")
+    } else if (df.results$logFC.expression_in_week1[i] > 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "+")
+    }
+    
+    # Flag4: Expression DE (Ctrl v 4707) in Week2
+    if (!df.results$Sig_at_0.05.expression_in_week2[i]) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "0")
+    } else if (df.results$logFC.expression_in_week2[i] < 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "-")
+    } else if (df.results$logFC.expression_in_week2[i] > 0) {
+        flag_at_0.05 <- paste0(flag_at_0.05, "+")
+    }
+    
+    if (!df.results$Sig_at_0.1.expression_in_week2[i]) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "0")
+    } else if (df.results$logFC.expression_in_week2[i] < 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "-")
+    } else if (df.results$logFC.expression_in_week2[i] > 0) {
+        flag_at_0.1 <- paste0(flag_at_0.1, "+")
+    }
+    
+    df.results$DE_flag_at_0.05[i] <- flag_at_0.05
+    df.results$DE_flag_at_0.1[i] <- flag_at_0.1
+}
+
+rm(flag_at_0.05, flag_at_0.1)
+```
+
+## topGO
+
+### Expression in Week2
+
+```{r}
+# df.results %>%
+#     arrange(t.expression_in_week2) %>%
+#     pull(t.expression_in_week2) -> t.stats.up.in.week2.4707
+# 
+# df.results %>%
+#     arrange(t.expression_in_week2) %>%
+#     pull(SYMBOL) -> names(t.stats.up.in.week2.4707)
+# 
+# # get t.stat threshold for 0.05 cutoff
+# df.results %>%
+#     filter(Sig_at_0.05.expression_in_week2, t.expression_in_week2 < 0) %>%
+#     top_n(n = 1, wt = t.expression_in_week2) %>%
+#     pull(t.expression_in_week2) -> t.stats.up.in.week2.4707.threshold
+# 
+# #-3.744989
+
+# df.results %>%
+#     dplyr::filter(Sig_at_0.05.expression_in_week2) %>%
+#     pull(SYMBOL) -> genes.to.test
+# 
+# geneList <- factor(as.integer(all.genes %in% genes.to.test))
+# names(geneList) <- all.genes
+
+df.results %>%
+    pull(adj.P.Val.expression_in_week2) -> geneList
+
+df.results %>%
+    pull(SYMBOL) -> names(geneList)
+selectionFun <- function(pval) {
+    return(pval <= 0.05)
+}
+
+myGOdata <- new("topGOdata",
+                ontology = "BP",
+                description = "my data",
+                allGenes = geneList,
+                geneSel = selectionFun,
+                nodeSize = 10,
+                annotationFun = annFUN.org,
+                mapping = "org.Hs.eg.db",
+                ID = "symbol")
+
+resultsClassicFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+#resultsClassicKS <- runTest(myGOdata, algorithm = "classic", statistic = "ks")
+resultsElimFisher <- runTest(myGOdata, algorithm = "elim", statistic = "fisher")
+#resultsElimKS <- runTest(myGOdata, algorithm = "elim", statistic = "ks")
+resultsWeightFisher <- runTest(myGOdata, algorithm = "weight", statistic = "fisher")
+resultsWeight01Fisher <- runTest(myGOdata, algorithm = "weight01", statistic = "fisher")
+resultsLeaFisher <- runTest(myGOdata, algorithm = "lea", statistic = "fisher")
+resultsParentChildFisher <- runTest(myGOdata, algorithm = "parentchild", statistic = "fisher")
+
+resultsClassicKS <- runTest(myGOdata, algorithm = "classic", statistic = "ks")
+resultsElimKS <- runTest(myGOdata, algorithm = "elim", statistic = "ks")
+resultsWeightKS <- runTest(myGOdata, algorithm = "weight01", statistic = "ks")
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "classic_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "elim_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "weight_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "weight01_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "lea_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "parentchild_fisher"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "classic_ks"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "elim_ks"))
+
+kable(GenTable(myGOdata,
+               classic_fisher = resultsClassicFisher, 
+               elim_fisher = resultsElimFisher,
+               weight_fisher = resultsWeightFisher,
+               weight01_fisher = resultsWeight01Fisher,
+               lea_fisher = resultsLeaFisher,
+               parentchild_fisher = resultsParentChildFisher,
+               classic_ks = resultsClassicKS,
+               elim_ks = resultsElimKS,
+               weight01_ks = resultsWeightKS,
+               topNodes = 40, orderBy = "weight01_ks"))
+
+# df.topgo <- as_tibble(df.topgo)
+# df.topgo %<>%
+#     mutate(classic_fisher = as.numeric(classic_fisher),
+#            elim_fisher = as.numeric(elim_fisher),
+#            weight_fisher = as.numeric(weight_fisher),
+#            weight01_fisher = as.numeric(weight01_fisher),
+#            lea_fisher = as.numeric(lea_fisher),
+#            parentchild_fisher = as.numeric(parentchild_fisher),
+#            classic_ks = as.numeric(classic_ks),
+#            elim_ks = as.numeric(elim_ks),
+#            weight01_ks = as.numeric(weight01_ks))
+
+```
+
+
+
+
+

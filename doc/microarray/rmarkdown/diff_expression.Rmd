@@ -1,0 +1,1457 @@
+---
+title: "HNP Differentiation Microarray Differential Expression"
+author: "Mike Lafferty"
+date: "2022-08-29"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 5
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=TRUE, echo=TRUE, message=FALSE, class.source = "fold-show"}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(magrittr)
+library(ggplot2)
+library(ggrepel)
+
+library(Biobase)
+library(pd.clariom.s.human.ht)
+library(clariomshumantranscriptcluster.db)
+library(oligo)
+
+library(limma)
+
+library(topGO)
+library(org.Hs.eg.db)
+
+library(multiMiR)
+library(miRNAtap)
+
+library(ComplexHeatmap)
+
+library(mikelaffr)
+library(knitr)
+
+# OUTPUT #############################################################
+dir.pdfs <- here("doc/microarray/pdfs/")
+dir.create(dir.pdfs, recursive = TRUE, showWarnings = FALSE)
+
+dir.topgo <- here("doc/microarray/topgo/")
+dir.create(dir.topgo, recursive = TRUE, showWarnings = FALSE)
+# INPUT ##############################################################
+# Microarray ExpressionSet for HNP Differentiataion Experiment, normalized, probe filtered
+expressionSet.rds <- here("results/rdata_files/20220829_es_HNP_Differential_Microarray_SST-RMA.rds")
+
+# single cell data from luis at UCLA showing genes upregulated in cell type clusters
+genes.by.cluster.xlsx <- here("data/ucla_single_cell/TableS4 Cluster analysis.xlsx")
+
+# TargetScan 8.0 Predicted Targets for miR-4707-3p
+targetScan8.0.mir4707.targets.txt <- here("data/target_predictions/TargetScan8.0_miR-4707-3p.predicted_targets.txt")
+
+# miRDB v6.0 Target Predictions
+miRDB6.0.target.predictions.txt <- here("data/target_predictions/miRDB_v6.0_prediction_result.txt.gz")
+
+# miRTarBase v7 Validated Target Interactions
+miRTarBase7.target.interactions.xlsx <- here("data/mirtarbase_v7/hsa_MTI.xlsx")
+
+# miRNAtap predictions, 2 sources
+miRNAtap.predictions.2sources.csv <- here("data/target_predictions/20190514_miRNAtap_predictions_2sources.csv")
+# GLOBALS ############################################################
+```
+
+```{r, results='asis', class.source = "fold-show"}
+# Import ExpressionSet
+eSet <- readRDS(expressionSet.rds)
+
+# add condition label
+eSet$Condition <- paste(eSet$Timepoint, eSet$Expression, sep = "_")
+
+#kable(pData(eSet))
+```
+
+## PCA
+
+### Uncorrected PCA
+
+```{r}
+pca <- prcomp(t(exprs(eSet)), center = TRUE, scale. = FALSE)
+
+df.pca <- as_tibble(data.frame(pca$x[,1:20], pData(eSet), stringsAsFactors = FALSE))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+# scree plot
+ggplot(data.frame(perc_var=percentVar, pc=1:length(percentVar))[1:10,], aes(x=pc, y=perc_var)) +
+    geom_point() +
+    geom_line() +
+    labs(x="PC", y="Percent Total Variance",
+         title="PCA: Microarray Expression (log2 Norm.)") +
+    scale_x_continuous(breaks = seq(1:10)) +
+    plotTheme()
+
+df.pca %>%
+    ggplot(aes(PC1, PC2, color = Condition)) +
+    geom_point(size = 3) +
+    #geom_label(hjust="inward", vjust="inward") +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme() +
+    scale_color_manual(values=cbPalette) +
+    labs(title="Microarray Expression (log2 Norm.)")
+
+rm(pca, df.pca, percentVar)
+```
+
+### Batch Corrected PCA
+
+```{r}
+corrected.expression <- limma::removeBatchEffect(eSet,
+                                                 covariates = eSet$cDNA_Yield_ug,
+                                                 design = model.matrix(~eSet$Timepoint + eSet$Expression))
+
+pca <- prcomp(t(corrected.expression), center = TRUE, scale. = FALSE)
+
+df.pca <- as_tibble(data.frame(pca$x[,1:20], pData(eSet), stringsAsFactors = FALSE))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+# scree plot
+ggplot(data.frame(perc_var=percentVar, pc=1:length(percentVar))[1:10,], aes(x=pc, y=perc_var)) +
+    geom_point() +
+    geom_line() +
+    labs(x="PC", y="Percent Total Variance",
+         title="PCA: Microarray Expression (log2 Norm.)") +
+    scale_x_continuous(breaks = seq(1:10)) +
+    plotTheme()
+
+df.pca %>%
+    ggplot(aes(PC1, PC2, color = Condition)) +
+    geom_point(size = 3) +
+    #geom_label(hjust="inward", vjust="inward") +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme() +
+    scale_color_manual(values=cbPalette) +
+    labs(title="Microarray Expression (log2 Norm.)")
+
+df.pca %>%
+    ggplot(aes(PC1, PC2, color = outlier)) +
+    geom_point(size = 3) +
+    #geom_label(hjust="inward", vjust="inward") +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme() +
+    scale_color_manual(values=cbPalette) +
+    labs(title="Microarray Expression (log2 Norm.)")
+
+rm(pca, df.pca, percentVar, corrected.expression)
+```
+
+### Outliers Removed
+
+```{r}
+filt.eSet <- eSet[,!eSet$outlier]
+
+corrected.expression <- limma::removeBatchEffect(filt.eSet,
+                                                 covariates = filt.eSet$cDNA_Yield_ug,
+                                                 design = model.matrix(~filt.eSet$Timepoint + filt.eSet$Expression))
+
+pca <- prcomp(t(corrected.expression), center = TRUE, scale. = FALSE)
+
+df.pca <- as_tibble(data.frame(pca$x[,1:20], pData(filt.eSet), stringsAsFactors = FALSE))
+percentVar <- pca$sdev^2 / sum(pca$sdev^2) * 100
+
+# scree plot
+ggplot(data.frame(perc_var=percentVar, pc=1:length(percentVar))[1:10,], aes(x=pc, y=perc_var)) +
+    geom_point() +
+    geom_line() +
+    labs(x="PC", y="Percent Total Variance",
+         title="PCA: Microarray Expression (log2 Norm.)") +
+    scale_x_continuous(breaks = seq(1:10)) +
+    plotTheme()
+
+df.pca %>%
+    ggplot(aes(PC1, PC2, color = Condition)) +
+    geom_point(size = 3) +
+    #geom_label(hjust="inward", vjust="inward") +
+    labs(x=paste("PC1 (", round(percentVar[1], 1), "%)", sep=""),
+         y=paste("PC2 (", round(percentVar[2], 1), "%)", sep="")) +
+    plotTheme() +
+    scale_color_manual(values=cbPalette) +
+    labs(title="Microarray Expression (log2 Norm.)")
+
+rm(pca, df.pca, percentVar)
+```
+## Differential Expression
+
+```{r, class.source = "fold-show"}
+# conduct differential expression primarily based on the 4 condition groups
+condition <- factor(filt.eSet$Condition)
+
+# include cDNA_yield in the model matrix
+design <- model.matrix(~ 0 + filt.eSet$cDNA_Yield_ug + condition)
+colnames(design) <- c("cDNA_yield", levels(condition))
+
+# fit to the expression data
+fit <- limma::lmFit(filt.eSet, design)
+
+# contrasts based on expression (contrl v 4707) or differentiation (week1 v week2)
+cont.matrix <- makeContrasts(Expression_in_Week1 = Week1_Control-Week1_4707,
+                             Expression_in_Week2 = Week2_Control-Week2_4707,
+                             Diff_in_Control = Week2_Control-Week1_Control,
+                             Diff_in_4707 = Week2_4707-Week1_4707,
+                             Interaction = (Week2_Control-Week2_4707)-(Week1_Control-Week1_4707),
+                             levels = design)
+
+# fit for contrasts
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+# results tables
+df.results.expression_in_week1 <- as_tibble(topTable(fit2, coef = "Expression_in_Week1", number=Inf, adjust.method = "BH"))
+df.results.expression_in_week2 <- as_tibble(topTable(fit2, coef = "Expression_in_Week2", number=Inf, adjust.method = "BH"))
+df.results.diff_in_control <- as_tibble(topTable(fit2, coef = "Diff_in_Control", number=Inf, adjust.method = "BH"))
+df.results.diff_in_4707 <- as_tibble(topTable(fit2, coef = "Diff_in_4707", number=Inf, adjust.method = "BH"))
+df.results.interaction <- as_tibble(topTable(fit2, coef = "Interaction", number=Inf, adjust.method = "BH"))
+
+
+rm(condition, design, fit, cont.matrix)
+```
+
+**Differentiation:**  
+__+LFC__: upregulated in week 2 (neuron markers?)  
+__-LFC__: upregulated in week 1 (progenitor markers?)  
+
+**Expression:**  
+__+LFC__: upregulated in CONTROL (repressed by mir4707?)  
+__-LFC__: upregulated in mir4707 induced  
+
+
+### Differentiation in Control
+
+Week1 vs Week2 in CONTROL cells. Positive LFC means upregulated in week 2, possibly neuron associated. Negative LFC means upregulated in week 1, possibly progenitor associated.
+
+```{r, class.source = "fold-show"}
+P.ADJ.SIG.THRESH <- 0.05
+
+interestingGenes <- c("NES", "TUBB3", "MKI67", "CCND1", "PAX6", "SOX2", "DCX", "HAUS4")
+
+# all expressed genes
+all.genes <- fData(filt.eSet)$SYMBOL
+```
+
+```{r}
+df.results.diff_in_control %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in Control",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[1]))
+
+df.results.diff_in_control %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% interestingGenes), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in Control",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[1]))
+
+df.results.diff_in_control %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SIG & (logFC > .5 | logFC < -0.5) & AveExpr > 8), mapping = aes(label = SYMBOL), size = 2, max.overlaps = 30, label.padding = 0.1) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in Control",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[1]))
+```
+
+#### topGO Upregulated in Week 1 Control
+
+```{r, message=FALSE}
+
+# topGo data frame file for this analysis
+df.topgo.upreg.week1.control.rds <- paste0(dir.topgo, "topgo_results_upreg_week1_control_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.week1.control.rds)) {
+    df.topgo.upreg.week1.control.classic.fisher <- readRDS(df.topgo.upreg.week1.control.rds)
+    rm(df.topgo.upreg.week1.control.rds)
+} else {
+    df.results.diff_in_control %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+        pull(SYMBOL) -> genes.diff.up.control
+    
+    geneList <- factor(as.integer(all.genes %in% genes.diff.up.control))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    df.topgo.upreg.week1.control.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.week1.control.classic.fisher, df.topgo.upreg.week1.control.rds)
+    
+    rm(genes.diff.up.control, geneList, myGOdata, resultsFisher, df.topgo.upreg.week1.control.rds)
+}
+
+kable(df.topgo.upreg.week1.control.classic.fisher[1:20,])
+```
+
+#### topGO Upregulated in Week 2 Control
+
+```{r, message=FALSE}
+
+# topGo data frame file for this analysis
+df.topgo.upreg.week2.control.rds <- paste0(dir.topgo, "topgo_results_upreg_week2_control_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.week2.control.rds)) {
+    df.topgo.upreg.week2.control.classic.fisher <- readRDS(df.topgo.upreg.week2.control.rds)
+    rm(df.topgo.upreg.week2.control.rds)
+} else {
+    df.results.diff_in_control %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+        pull(SYMBOL) -> genes.diff.down.control
+    
+    geneList <- factor(as.integer(all.genes %in% genes.diff.down.control))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    df.topgo.upreg.week2.control.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.week2.control.classic.fisher, df.topgo.upreg.week2.control.rds)
+    
+    rm(genes.diff.down.control, myGOdata, resultsFisher, df.topgo.upreg.week2.control.rds)
+}
+
+kable(df.topgo.upreg.week2.control.classic.fisher[1:20,])
+```
+
+### Differentiation in mir4707 Induced
+
+Week1 vs Week2 in mir4707 induced cells. Positive LFC means upregulated in week 2, possibly neuron associated. Negative LFC means upregulated in week 1, possibly progenitor associated.
+
+```{r}
+df.results.diff_in_4707 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in mir4707",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[2]))
+
+df.results.diff_in_4707 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% interestingGenes), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in mir4707",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[2]))
+
+df.results.diff_in_4707 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SIG & (logFC > .5 | logFC < -0.5) & AveExpr > 8), mapping = aes(label = SYMBOL), size = 2, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Week1 vs Week2 in mir4707",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Week2", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in Week1", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[2]))
+```
+
+#### topGO Upregulated in Week 1 mir4707
+
+```{r, message=FALSE}
+
+# topGo data frame file for this analysis
+df.topgo.upreg.week1.4707.rds <- paste0(dir.topgo, "topgo_results_upreg_week1_4707_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.week1.4707.rds)) {
+    df.topgo.upreg.week1.4707.classic.fisher <- readRDS(df.topgo.upreg.week1.4707.rds)
+    rm(df.topgo.upreg.week1.4707.rds)
+} else {
+    df.results.diff_in_4707 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+        pull(SYMBOL) -> genes.diff.up.4707
+    
+    geneList <- factor(as.integer(all.genes %in% genes.diff.up.4707))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    df.topgo.upreg.week1.4707.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.week1.4707.classic.fisher, df.topgo.upreg.week1.4707.rds)
+    
+    rm(genes.diff.up.4707, geneList, myGOdata, resultsFisher, df.topgo.upreg.week1.4707.rds)
+}
+
+kable(df.topgo.upreg.week1.4707.classic.fisher[1:20,])
+```
+
+#### topGO Upregulated in Week 2 mir4707
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upreg.week2.4707.rds <- paste0(dir.topgo, "topgo_results_upreg_week2_4707_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.week2.4707.rds)) {
+    df.topgo.upreg.week2.4707.classic.fisher <- readRDS(df.topgo.upreg.week2.4707.rds)
+    rm(df.topgo.upreg.week2.4707.rds)
+} else {
+    df.results.diff_in_4707 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+        pull(SYMBOL) -> genes.diff.down.4707
+    
+    geneList <- factor(as.integer(all.genes %in% genes.diff.down.4707))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    
+    df.topgo.upreg.week2.4707.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.week2.4707.classic.fisher, df.topgo.upreg.week2.4707.rds)
+    
+    rm(genes.diff.down.4707, geneList, myGOdata, resultsFisher, df.topgo.upreg.week2.4707.rds)
+}
+
+kable(df.topgo.upreg.week2.4707.classic.fisher[1:20,])
+```
+
+### Expression in Week 1
+
+CONTROL vs mir4707 in week 1 cells. Positive LFC means upregulated in CONTROL, possibly repressed by mir4707. Negative LFC means upregulated in mir4707 induced.
+
+```{r}
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% interestingGenes), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SIG & (logFC > .5 | logFC < -0.5) & AveExpr > 8), mapping = aes(label = SYMBOL), size = 2, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+```
+
+#### topGO Upregulated in Control vs mir4707 in Week 1
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upreg.control.week1.rds <- paste0(dir.topgo, "topgo_results_upreg_control_week1_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.control.week1.rds)) {
+    df.topgo.upreg.control.week1.classic.fisher <- readRDS(df.topgo.upreg.control.week1.rds)
+    rm(df.topgo.upreg.control.week1.rds)
+} else {
+    df.results.expression_in_week1 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+        pull(SYMBOL) -> genes.exp.up.week1
+    
+    geneList <- factor(as.integer(all.genes %in% genes.exp.up.week1))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    
+    df.topgo.upreg.control.week1.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.control.week1.classic.fisher, df.topgo.upreg.control.week1.rds)
+    
+    rm(genes.exp.up.week1, geneList, myGOdata, resultsFisher, df.topgo.upreg.control.week1.rds)
+}
+
+kable(df.topgo.upreg.control.week1.classic.fisher[1:20,])
+```
+
+#### topGO Upregulated in mir4707 vs Control in Week 1
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upreg.4707.week1.rds <- paste0(dir.topgo, "topgo_results_upreg_4707_week1_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.4707.week1.rds)) {
+    df.topgo.upreg.4707.week1.classic.fisher <- readRDS(df.topgo.upreg.4707.week1.rds)
+    rm(df.topgo.upreg.4707.week1.rds)
+} else {
+    df.results.expression_in_week1 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+        pull(SYMBOL) -> genes.exp.down.week1
+    
+    geneList <- factor(as.integer(all.genes %in% genes.exp.down.week1))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    
+    df.topgo.upreg.4707.week1.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.4707.week1.classic.fisher, df.topgo.upreg.4707.week1.rds)
+    
+    rm(genes.exp.down.week1, geneList, myGOdata, resultsFisher, df.topgo.upreg.4707.week1.rds)
+}
+
+kable(df.topgo.upreg.4707.week1.classic.fisher[1:20,])
+```
+
+
+### Expression in Week 2
+
+CONTROL vs mir4707 in week 2 cells. Positive LFC means upregulated in CONTROL, possibly repressed by mir4707. Negative LFC means upregulated in mir4707 induced.
+
+```{r}
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% interestingGenes), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SIG & (logFC > .5 | logFC < -0.5) & AveExpr > 8), mapping = aes(label = SYMBOL), size = 2, max.overlaps = 30) +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+```
+
+#### topGO Upregulated in Control vs mir4707 in Week 2
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upreg.control.week2.rds <- paste0(dir.topgo, "topgo_results_upreg_control_week2_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.control.week2.rds)) {
+    df.topgo.upreg.control.week2.classic.fisher <- readRDS(df.topgo.upreg.control.week2.rds)
+    rm(df.topgo.upreg.control.week2.rds)
+} else {
+    df.results.expression_in_week2 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+        pull(SYMBOL) -> genes.exp.up.week2
+    
+    geneList <- factor(as.integer(all.genes %in% genes.exp.up.week2))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    df.topgo.upreg.control.week2.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.control.week2.classic.fisher, df.topgo.upreg.control.week2.rds)
+    
+    rm(genes.exp.up.week2, geneList, myGOdata, resultsFisher, df.topgo.upreg.control.week2.rds)
+}
+
+kable(df.topgo.upreg.control.week2.classic.fisher[1:20,])
+```
+
+#### topGO Upregulated in mir4707 vs Control in Week 2
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upreg.4707.week2.rds <- paste0(dir.topgo, "topgo_results_upreg_4707_week2_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upreg.4707.week2.rds)) {
+    df.topgo.upreg.4707.week2.classic.fisher <- readRDS(df.topgo.upreg.4707.week2.rds)
+    rm(df.topgo.upreg.4707.week2.rds)
+} else {
+    df.results.expression_in_week2 %>%
+        filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+        pull(SYMBOL) -> genes.exp.down.week2
+    
+    geneList <- factor(as.integer(all.genes %in% genes.exp.down.week2))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    df.topgo.upreg.4707.week2.classic.fisher <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(df.topgo.upreg.4707.week2.classic.fisher, df.topgo.upreg.4707.week2.rds)
+    
+    rm(genes.exp.down.week2, geneList, myGOdata, resultsFisher, df.topgo.upreg.4707.week2.rds)
+}
+
+kable(df.topgo.upreg.4707.week2.classic.fisher[1:20,])
+```
+
+## miR-4707-3p Targets
+
+```{r, class.source = "fold-show", message=FALSE}
+df.targetScan.predictions <- read_tsv(targetScan8.0.mir4707.targets.txt)
+
+df.mirdb.predictions <- read_tsv(miRDB6.0.target.predictions.txt, col_names = c("miRNA_Name", "GenBank", "Target_Score", "ENTREZID"))
+df.mirdb.predictions %<>%
+    filter(miRNA_Name == "hsa-miR-4707-3p") %>%
+    filter(!duplicated(ENTREZID)) %>%
+    mutate(ENTREZID = as.character(ENTREZID))
+
+anno <- AnnotationDbi::select(org.Hs.eg.db,
+                              keys = df.mirdb.predictions$ENTREZID,
+                              keytype = "ENTREZID",
+                              columns = c("SYMBOL"))
+
+df.mirdb.predictions %<>%
+    left_join(anno, by = "ENTREZID")
+
+df.mirtarbase.interactions <- read_xlsx(miRTarBase7.target.interactions.xlsx)
+df.mirtarbase.interactions %<>%
+    filter(miRNA == "hsa-miR-4707-3p") %>%
+    filter(!duplicated(`Target Gene`))
+```
+
+**miRDB Predicted Targets**: 46  
+
+**TargetScan Predicted Targets**: 1758  
+
+**miRTarBase Validated Interactions**: 104  
+
+
+```{r, class.source = "fold-show"}
+table(df.mirdb.predictions$SYMBOL %in% df.targetScan.predictions$`Target gene`)
+
+table(df.mirdb.predictions$SYMBOL %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(df.mirtarbase.interactions$`Target Gene` %in% df.targetScan.predictions$`Target gene`)
+```
+
+
+### Differentially Expressed Targets
+
+```{r, class.source = "fold-show"}
+# week 1, control vs 4707, genes that are up in control (down in 4707)
+df.results.expression_in_week1 %>%
+    filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+    pull(SYMBOL) -> genes.exp.up.in.control.week1
+
+table(genes.exp.up.in.control.week1 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.exp.up.in.control.week1 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.exp.up.in.control.week1 %in% df.targetScan.predictions$`Target gene`)
+
+
+```
+
+```{r, class.source = "fold-show"}
+# week 2, control vs 4707, genes that are up in control (down in 4707)
+df.results.expression_in_week2 %>%
+    filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC > 0) %>%
+    pull(SYMBOL) -> genes.exp.up.in.control.week2
+
+table(genes.exp.up.in.control.week2 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.exp.up.in.control.week2 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.exp.up.in.control.week2 %in% df.targetScan.predictions$`Target gene`)
+
+```
+
+```{r, class.source = "fold-show"}
+# genes that down-regulated by 4707 expression in BOTH week1 and week2
+genes.downregulated.by.4707 <- genes.exp.up.in.control.week2[genes.exp.up.in.control.week2 %in% genes.exp.up.in.control.week1]
+
+table(genes.downregulated.by.4707 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.downregulated.by.4707 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.downregulated.by.4707 %in% df.targetScan.predictions$`Target gene`)
+
+```
+
+```{r}
+# combine expression data into one dataframe
+
+df.results.diff_in_control %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.diff_in_4707 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.expression_in_week1 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.expression_in_week2 %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.interaction %<>%
+    mutate(Sig_at_0.05 = adj.P.Val < 0.05,
+           Sig_at_0.1 = adj.P.Val < 0.1)
+
+df.results.diff <- left_join(df.results.diff_in_control, df.results.diff_in_4707,
+                             by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"),
+                             suffix = c(".diff_in_control", ".diff_in_4707"))
+
+
+df.results.expression <- left_join(df.results.expression_in_week1, df.results.expression_in_week2,
+                                   by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"),
+                                   suffix = c(".expression_in_week1", ".expression_in_week2"))
+
+df.results <- left_join(df.results.diff, df.results.expression,
+                        by = c("PROBEID", "SYMBOL", "GENENAME", "ENSEMBL", "ENTREZID", "duplicate.annotation"))
+
+df.results.interaction %>%
+    dplyr::select(PROBEID,
+           logFC.interaction = logFC,
+           AveExpr.interaction = AveExpr,
+           t.interaction = t,
+           P.Value.interaction = P.Value,
+           adj.P.Val.interaction = adj.P.Val,
+           B.interaction = B,
+           Sig_at_0.05.interaction = Sig_at_0.05,
+           Sig_at_0.1.interaction = Sig_at_0.1) -> df.results.int
+
+df.results %<>%
+    left_join(df.results.int, by = "PROBEID")
+
+df.results %<>%
+    mutate(miRDB_predicted_target = SYMBOL %in% df.mirdb.predictions$SYMBOL,
+           TargetScan_predicted_target = SYMBOL %in% df.targetScan.predictions$`Target gene`,
+           miRTarBase_validated_target = SYMBOL %in% df.mirtarbase.interactions$`Target Gene`)
+```
+
+```{r}
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirdb.predictions$SYMBOL), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRDB predictions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirdb.predictions$SYMBOL), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRDB predictions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+
+```
+
+```{r}
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.targetScan.predictions$`Target gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "TargetScan predictions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.targetScan.predictions$`Target gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "TargetScan predictions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+
+```
+
+```{r}
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirtarbase.interactions$`Target Gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRTarBase interactions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirtarbase.interactions$`Target Gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRTarBase interactions") +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+```
+
+#### Genes Downregulated by 4707
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.downregulated.by4707.rds <- paste0(dir.topgo, "topgo_results_downreg_by_4707_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.downregulated.by4707.rds)) {
+    topgo.genes.downregulated.by4707 <- readRDS(df.topgo.downregulated.by4707.rds)
+    rm(df.topgo.downregulated.by4707.rds)
+} else {
+    geneList <- factor(as.integer(all.genes %in% genes.downregulated.by.4707))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    topgo.genes.downregulated.by4707 <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    saveRDS(topgo.genes.downregulated.by4707, df.topgo.downregulated.by4707.rds)
+    
+    rm(geneList, myGOdata, resultsFisher, df.topgo.downregulated.by4707.rds)
+}
+
+kable(topgo.genes.downregulated.by4707[1:20,])
+```
+
+#### Genes Downregulated AND Targeted by 4707
+
+```{r}
+genes.downregulated.and.targeted.by.4707 <- genes.downregulated.by.4707[genes.downregulated.by.4707 %in% df.targetScan.predictions$`Target gene`]
+
+genes.downregulated.by.4707[genes.downregulated.by.4707 %in% df.mirtarbase.interactions$`Target Gene`]
+
+genes.downregulated.and.targeted.by.4707
+
+df.results.expression_in_week1 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% genes.downregulated.and.targeted.by.4707), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30, color = "red") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% genes.downregulated.and.targeted.by.4707), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 1",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[4]))
+
+df.results.expression_in_week2 %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_label_repel(data = function(x) subset(x, SYMBOL %in% genes.downregulated.and.targeted.by.4707), mapping = aes(label = SYMBOL), size = 3, max.overlaps = 30, color = "red") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% genes.downregulated.and.targeted.by.4707), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Control vs mir4707 in Week 2",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    annotate(geom = "text", label = "Up in Control", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "Up in mir4707", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", cbPalette[5]))
+
+```
+
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.downregulated.and.targeted.by4707.rds <- paste0(dir.topgo, "topgo_results_downreg_and_targeted_by_4707_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.downregulated.and.targeted.by4707.rds)) {
+    topgo.genes.downregulated.and.targeted.by4707 <- readRDS(df.topgo.downregulated.and.targeted.by4707.rds)
+    rm(df.topgo.downregulated.and.targeted.by4707.rds)
+} else {
+    geneList <- factor(as.integer(all.genes %in% genes.downregulated.by.4707 & all.genes %in% df.targetScan.predictions$`Target gene`))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    topgo.genes.downregulated.and.targeted.by4707 <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    
+    saveRDS(topgo.genes.downregulated.and.targeted.by4707, df.topgo.downregulated.and.targeted.by4707.rds)
+    
+    rm(geneList, myGOdata, resultsFisher, df.topgo.downregulated.and.targeted.by4707.rds)
+}
+
+kable(topgo.genes.downregulated.and.targeted.by4707[1:20,])
+```
+
+### Genes Upregulated by 4707
+
+```{r, class.source = "fold-show"}
+# week 1, control vs 4707, genes that are up in 4707 (down in control)
+df.results.expression_in_week1 %>%
+    filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+    pull(SYMBOL) -> genes.exp.down.in.control.week1
+
+table(genes.exp.down.in.control.week1 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.exp.down.in.control.week1 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.exp.down.in.control.week1 %in% df.targetScan.predictions$`Target gene`)
+```
+
+```{r, class.source = "fold-show"}
+# week 2, control vs 4707, genes that are up in 4707 (down in control)
+df.results.expression_in_week2 %>%
+    filter(adj.P.Val < P.ADJ.SIG.THRESH & logFC < 0) %>%
+    pull(SYMBOL) -> genes.exp.down.in.control.week2
+
+table(genes.exp.down.in.control.week2 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.exp.down.in.control.week2 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.exp.down.in.control.week2 %in% df.targetScan.predictions$`Target gene`)
+```
+
+```{r, class.source = "fold-show"}
+# genes that up-regulated by 4707 expression in BOTH week1 and week2
+genes.upregulated.by.4707 <- genes.exp.down.in.control.week2[genes.exp.down.in.control.week2 %in% genes.exp.down.in.control.week1]
+
+table(genes.upregulated.by.4707 %in% df.mirdb.predictions$SYMBOL)
+
+table(genes.upregulated.by.4707 %in% df.mirtarbase.interactions$`Target Gene`)
+
+table(genes.upregulated.by.4707 %in% df.targetScan.predictions$`Target gene`)
+```
+
+```{r, message=FALSE}
+# topGo data frame file for this analysis
+df.topgo.upregulated.by4707.rds <- paste0(dir.topgo, "topgo_results_upregulated_by_4707_classic_fisher_df.rds")
+
+if (file.exists(df.topgo.upregulated.by4707.rds)) {
+    topgo.genes.upregulated.by.4707 <- readRDS(df.topgo.upregulated.by4707.rds)
+    rm(df.topgo.upregulated.by4707.rds)
+} else {
+    geneList <- factor(as.integer(all.genes %in% genes.upregulated.by.4707))
+    names(geneList) <- all.genes
+    
+    myGOdata <- new("topGOdata",
+                    ontology = "BP",
+                    description = "my data",
+                    allGenes = geneList,
+                    nodeSize = 10,
+                    annotationFun = annFUN.org,
+                    mapping = "org.Hs.eg.db",
+                    ID = "symbol")
+    
+    resultsFisher <- runTest(myGOdata, algorithm = "classic", statistic = "fisher")
+    
+    topgo.genes.upregulated.by.4707 <- GenTable(myGOdata, classic_fisher = resultsFisher, topNodes = 80, orderBy = "classic_fisher")
+    
+    
+    saveRDS(topgo.genes.upregulated.by.4707, df.topgo.upregulated.by4707.rds)
+    
+    rm(geneList, myGOdata, resultsFisher, df.topgo.upregulated.by4707.rds)
+}
+
+kable(topgo.genes.upregulated.by.4707[1:20,])
+```
+
+```{r}
+genes.downregulated.by.4707
+
+genes.upregulated.by.4707
+
+
+```
+
+## Interaction: Expression x Week
+
+```{r}
+
+df.results.interaction %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    #filter() %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr, y = logFC, color = SIG)) +
+    geom_point() +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Interaction",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    #scale_x_log10() +
+    theme(legend.position = "bottom") +
+    geom_hline(yintercept = 0, size=1, color="blue") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", "blue"))
+
+df.results.interaction %>%
+    mutate(SIG = adj.P.Val < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = logFC, y = -log10(adj.P.Val), color = SIG)) +
+    geom_point() +
+    labs(x="Log2 Fold Change",
+         y="-Log10(adj. P)",
+         title="Differential Expression: Interaction",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep="")) +
+    #scale_x_log10() +
+    theme(legend.position = "bottom") +
+    #geom_vline(xintercept = 0, size=1, color="black", linetype = "dashed") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", "blue")) +
+    geom_label_repel(data = function(x) subset(x, SIG), mapping = aes(label = SYMBOL), size = 2, label.padding = .1)
+
+```
+
+```{r}
+rownames(corrected.expression) <- fData(filt.eSet)$SYMBOL
+
+df.samples <- as_tibble(pData(filt.eSet))
+df.samples %<>%
+    mutate(Week = as.numeric(Timepoint))
+
+
+tmp <- as.data.frame(corrected.expression["PDGFRA",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("PDGFRA_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+tmp <- as.data.frame(corrected.expression["IGFBP3",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("IGFBP3_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+tmp <- as.data.frame(corrected.expression["ITGA3",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("ITGA3_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+tmp <- as.data.frame(corrected.expression["SRPX2",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("SRPX2_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+tmp <- as.data.frame(corrected.expression["MFAP5",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("MFAP5_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "PDGFRA"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = PDGFRA_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "IGFBP3"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = IGFBP3_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "ITGA3"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = ITGA3_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "SRPX2"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = SRPX2_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "MFAP5"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = MFAP5_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+```
+
+```{r}
+df.results %>%
+    dplyr::filter(Sig_at_0.05.diff_in_control & (! Sig_at_0.05.diff_in_4707) & (logFC.diff_in_control > 0)) -> df.diff_control
+
+
+df.results %>%
+    dplyr::filter(Sig_at_0.05.interaction) -> df.interact
+
+df.interact %<>%
+    mutate(sig_combo = Sig_at_0.05.diff_in_4707 | Sig_at_0.05.diff_in_control | Sig_at_0.05.expression_in_week1 | Sig_at_0.05.expression_in_week2)
+
+#CALHM3
+
+tmp <- as.data.frame(corrected.expression["CALHM3",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("CALHM3_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "CALHM3"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = CALHM3_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+tmp <- as.data.frame(corrected.expression["CRABP1",])
+tmp$CEL <- rownames(tmp)
+colnames(tmp) <- c("CRABP1_expression", "CEL")
+
+df.samples %<>%
+    left_join(tmp, by = "CEL")
+
+kable(df.results.interaction %>%
+    dplyr::filter(SYMBOL == "CRABP1"))
+
+df.samples %>%
+    ggplot(aes(x = Week, y = CRABP1_expression, color = Expression)) +
+    geom_point() +
+    geom_smooth(method = "lm")
+
+
+```
+
+
+```{r}
+df.results %>%
+    mutate(SIG = adj.P.Val.interaction < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr.interaction, y = logFC.interaction, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirdb.predictions$SYMBOL), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Interaction",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRDB predictions") +
+    annotate(geom = "text", label = "", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", "blue"))
+
+df.results %>%
+    mutate(SIG = adj.P.Val.interaction < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr.interaction, y = logFC.interaction, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.targetScan.predictions$`Target gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Interaction",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "TargetScan predictions") +
+    annotate(geom = "text", label = "", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", "blue"))
+
+df.results %>%
+    mutate(SIG = adj.P.Val.interaction < P.ADJ.SIG.THRESH) %>%
+    arrange(SIG) %>%
+    ggplot(aes(x = AveExpr.interaction, y = logFC.interaction, color = SIG)) +
+    geom_point() +
+    geom_hline(yintercept = 0, size=1, color="black") +
+    geom_point(data = function(x) subset(x, SYMBOL %in% df.mirtarbase.interactions$`Target Gene`), size = 3, shape = 1, color = "red") +
+    labs(x="Mean of Normalized Counts",
+         y="Log2 Fold Change",
+         title="Differential Expression: Interaction",
+         color=paste("p.adj <", P.ADJ.SIG.THRESH, sep=""),
+         caption = "miRTarBase interactions") +
+    annotate(geom = "text", label = "", x = Inf, y = Inf, hjust = 1.1, vjust = 1.5) +
+    annotate(geom = "text", label = "", x = Inf, y = -Inf, hjust = 1.1, vjust = -0.6) +
+    theme(legend.position = "bottom") +
+    plotTheme() +
+    scale_color_manual(values=c("grey70", "blue"))
+```
+

@@ -1,0 +1,8 @@
+Preparation of genotype files for imputation was done within the /results/genotypes/imputation_*
+directories. See READMEs within those directories for information on how .vcf files were prepared
+for the Michigan Imputation Server.
+
+Post imputation, download, and unzip, the .vcf files were processed with scripts found in this
+directory.
+
+
