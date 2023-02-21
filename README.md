@@ -17,8 +17,11 @@ Total RNA sequencing data used in this manuscript is available via dbGaP accessi
 ### Microarray Expression
 Microarray expression data used in this manuscript is available via GEO accession [GSE224188](https://doi.org/10.1016/j.cell.2019.09.021).
 
+## Code
 
+### Local-miRNA-eQTLs
 
+Primary local-miRNA-eQTLs were found using EMMAX using scripts [here](https://github.com/mikelaff/mirna-eqtl-manuscript/tree/main/src/emmax/final_pipeline). Secondary and greater degree eQTLs were found by repeating the pipeline at various significance thresholds using scripts [here](https://github.com/mikelaff/mirna-eqtl-manuscript/tree/main/src/conditionally_independent_eqtls).
 
 
 
