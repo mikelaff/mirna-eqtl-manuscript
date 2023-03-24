@@ -1,0 +1,29 @@
+Summary statistics for local-miRNA-eQTL analysis in human fetal cortex as found in:
+
+Michael J Lafferty, Nil Aygün, Niyanta K Patel, Oleh Krupa, Dan Liang, 
+Justin M Wolter, Daniel H Geschwind, Luis de la Torre-Ubieta, Jason L Stein (2023) 
+MicroRNA-eQTLs in the developing human neocortex link miR-4707-3p expression to brain size eLife 12:e79488.
+
+https://doi.org/10.7554/eLife.79488
+
+Association results are from primary, secondary, and tertiary analyses. No significant results were
+found in the quarternary analysis and have been left out of these summary statistics.
+
+Columns:
+SNP: unique variant identifier, combination of chromosome, base-pair position, and variants
+BETA: eQTL association effect size after fitting to the linear mixed model using EMMAX
+P: nominal p-value on linear mixed model fitting using EMMAX
+UniName: combination of primary-miRNA and mature-miRNA name to create a unique identifier for miRNAs with the same sequence that originate from multiple genomic loci
+CHR: variant chromosome
+BP.hg38: variant base-pair position using hg38
+REF: reference allele using hg38
+ALT: alternate allele using hg38
+ALT_CTS: alternate allele counts. Summed allelic dosage across all samples in the analysis
+OBS_CT: total allele counts. Number of samples x2
+EFFECT.ALLELE: effect allele used in the linear mixed model association by EMMAX
+A1: A1 allele as defined by plink1.9, usually minor allele
+A2: A2 allele as defined by plink1.9, usually major allele
+A1.HOM.count: number of homozygous A1 samples
+HET.count: number of heterozygous samples
+A2.HOM.count: number of homozygous A2 samples
+degree: degree to which the association is conditionally-independent
