@@ -10,10 +10,15 @@ https://doi.org/10.7554/eLife.79488
 
 ## Data
 
+### Summary Statistics
+Summary statistics for all SNP-miRNA association tests are located at [`results/sumstats/`](https://github.com/mikelaff/mirna-eqtl-manuscript/tree/main/results/sumstats).  
+
 ### Small RNA-Sequencing
 Raw small RNA sequencing data used in this manuscript will be available via dbGaP accession [phs001900.v1.p1](https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=phs003106.v1.p1).  
+
 ### Total RNA-Sequencing
-Total RNA sequencing data used in this manuscript is available via dbGaP accession [phs001900.v1.p1](https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=phs001900.v1.p1) and was used in the associated manuscript by [Walker et al.](https://doi.org/10.1016/j.cell.2019.09.021).
+Total RNA sequencing data used in this manuscript is available via dbGaP accession [phs001900.v1.p1](https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=phs001900.v1.p1) and was used in the associated manuscript by [Walker et al.](https://doi.org/10.1016/j.cell.2019.09.021).  
+
 ### Microarray Expression
 Microarray expression data used in this manuscript is available via GEO accession [GSE224188](https://doi.org/10.1016/j.cell.2019.09.021).
 
