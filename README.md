@@ -20,7 +20,7 @@ Raw small RNA sequencing data used in this manuscript is available via dbGaP acc
 Total RNA sequencing data used in this manuscript is available via dbGaP accession [phs001900.v1.p1](https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=phs001900.v1.p1) and was used in the associated manuscript by [Walker et al.](https://doi.org/10.1016/j.cell.2019.09.021).  
 
 ### Microarray Expression
-Microarray expression data used in this manuscript is available via GEO accession [GSE224188](https://doi.org/10.1016/j.cell.2019.09.021).
+Microarray expression data used in this manuscript is available via GEO accession [GSE224188](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE224188).
 
 ## Code
 
